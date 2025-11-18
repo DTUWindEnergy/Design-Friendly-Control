@@ -38,3 +38,8 @@ htmlcov/
 *.out
 docs/_tags/*
 */e*.pt
+
+*_scratch.py
+*_scratch.ipynb
+*_draft.py
+*_draft.ipynb

@@ -37,7 +37,8 @@ def get_flowmodel(wt=None, site=None):
     turbulence_model = CrespoHernandez(
         ct2a=ct2a_mom1d,
         c=[0.73, 0.83, 0.03, -0.32],
-        addedTurbulenceSuperpositionModel=SqrMaxSum(),
+        addedTurbulenceSuperpositionModel=SqrMaxSum(),  
+        # rotorAvgModel=CGIRotorAvg(21),
     )
 
     # Defaults from py_wake.literature except deflection model

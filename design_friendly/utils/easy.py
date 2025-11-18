@@ -24,7 +24,7 @@ def easy_yaw_gnn(
     results = predict(
         model_path=model_path,
         test_graphs=graphs,
-        batch_size=len(wd),
+        batch_size=int(len(wd)*len(ws)),
         reshape=(n_wt, len(wd), len(ws)),
     )
     return results

@@ -80,7 +80,7 @@ def main():
     model_path = "/home/dgodi/ActiveProjects/eth/windfarm-gnn/gnn_framework/runs/GEN_4_layers_0.0_dropout_0.0001_lr_100_epochs_256_latent_dim_07_30_21_11/"
     results = predict(
         model_path=model_path,
-        test_graphs=graphs,  # GraphSet
+        test_graphs=graphs,  # in-memory graphs
         model_version="best",
     )
     # visualize
