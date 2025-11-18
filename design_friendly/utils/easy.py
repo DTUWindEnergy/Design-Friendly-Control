@@ -12,6 +12,7 @@ def easy_yaw_gnn(
     ws,
     TI,
     model_path="models/best.pt",
+    num_threads=0,
 ):
     n_wt = len(x)
     graphs = graph_maker_lut(
@@ -20,11 +21,12 @@ def easy_yaw_gnn(
         wds=wd,
         wss=ws,
         TI=TI,
+        num_threads=num_threads,
     )
     results = predict(
         model_path=model_path,
         test_graphs=graphs,
-        batch_size=int(len(wd)*len(ws)),
+        batch_size=int(len(wd) * len(ws)),
         reshape=(n_wt, len(wd), len(ws)),
     )
     return results

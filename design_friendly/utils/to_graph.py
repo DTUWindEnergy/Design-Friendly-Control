@@ -17,6 +17,10 @@ from torch_geometric.utils import dense_to_sparse
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from tqdm_joblib import tqdm_joblib
+import logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  # or DEBUG
 
 
 def geometric_median(x, y):
@@ -320,7 +324,7 @@ def process_one_layout(
 def generate_graphs(
     layouts,  # list of layout dicts
     inflows,  # list of inflow dicts
-    num_threads=-1,
+    num_threads=0,
     target_dicts=None,
     per_turbines=True,  # list of per_turbine dicts
     connectivity="delaunay",
@@ -337,9 +341,9 @@ def generate_graphs(
         Layout dictionaries containing 'coords' entries.
     inflows : list of dict
         Inflow dictionaries with 'WS', 'TI', and 'WD'.
-    num_threads : int, default -1
+    num_threads : int, default 0
         Number of threads for parallel conversion.
-    per_turbines : list of dict or None
+    per_turbines : list of dict or bool
         Optional per-turbine baselines matching layouts.
     connectivity : str, default 'delaunay'
         Graph connectivity scheme for all layouts.
@@ -361,40 +365,44 @@ def generate_graphs(
         per_turbines = [bool(per_turbines)] * n_cases
     if target_dicts is None:
         target_dicts = [None] * n_cases
+    # if all layouts are the same and per_turbines_dict is not populated (list of Nones or something); run pywake vectorized for inflows (unless per_turbines False)
 
-    if num_threads is -1 or num_threads > 1:
-        with tqdm_joblib(tqdm(desc="Converting to graphs", total=n_cases)):
+    iter_cases = list(zip(layouts, inflows, per_turbines, target_dicts))
+    if (num_threads == -1) or (num_threads > 1):
+        with tqdm_joblib(tqdm(desc="Converting to graphs", total=len(iter_cases))):
             graphs = Parallel(n_jobs=num_threads)(
                 delayed(process_one_layout)(
-                    layout=layouts[i],
-                    inflow=inflows[i],
-                    per_turbine_dict=per_turbines[i],
-                    target_dict=target_dicts[i],  # None defaults to yaw
+                    layout=layout,
+                    inflow=inflow,
+                    per_turbine_dict=per_turbine,
+                    target_dict=target_dict,  # None defaults to yaw
                     layout_id=str(i).zfill(7),
                     connectivity=connectivity,
                     yaws_model=yaws_model,
                 )
-                for i in range(n_cases)
+                for i, (layout, inflow, per_turbine, target_dict) in enumerate(
+                    iter_cases
+                )
             )
     else:
         graphs = []
-        for layout, inflow, per_turbine, target_dict in zip(
-            layouts, inflows, per_turbines, target_dicts
+        for i, (layout, inflow, per_turbine, target_dict) in tqdm(
+            enumerate(iter_cases), total=len(iter_cases), desc="Converting to graphs"
         ):
             g = process_one_layout(
                 layout=layout,
                 inflow=inflow,
                 per_turbine_dict=per_turbine,
                 target_dict=target_dict,
-                layout_id=0,
+                layout_id=str(i).zfill(7),
                 connectivity=connectivity,
                 yaws_model=yaws_model,
             )
             graphs.append(g)
-    print("generated", len(graphs), "graphs from", n_cases, "cases")
+    logger.info(f"generated {len(graphs)} graphs from {n_cases} cases")
     if save_pt_path:
         torch.save(graphs, save_pt_path)
-        print("Saved graphs to:", save_pt_path)
+        logger.info("Saved graphs to:", save_pt_path)
     if return_list_of_graphs:
         return graphs
     return GraphFarmsDataset(graphs)
@@ -498,9 +506,10 @@ def graph_maker_sequential(
     per_turbines=True,  # precalculated node features
     target_dicts=None,
     connectivity="delaunay",
+    num_threads=0,
 ):
     """
-    Generate graphs for sequential layout/inflow tuples.
+    Generate graphs for sequential layout/inflow tuples. format inputs and call generate_graphs
 
     Parameters
     ----------
@@ -538,7 +547,7 @@ def graph_maker_sequential(
     graphs = generate_graphs(
         layouts=layouts,
         inflows=inflows,
-        num_threads=-1,
+        num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=per_turbines,
         connectivity="delaunay",
@@ -557,9 +566,11 @@ def graph_maker_lut(
     target_dicts=None,
     per_turbines=True,
     connectivity="delaunay",
+    num_threads=0,
 ):
     """
-    Build a lookup table of graphs over wind direction/speed combinations for specific WF coordinates.
+    Build a lookup table of graphs over wind direction/speed combinations for specific WF
+    coordinates. format inputs and call generate_graphs
 
     Parameters
     ----------
@@ -573,8 +584,8 @@ def graph_maker_lut(
         Wind speeds to iterate.
     TI : float
         Turbulence intensity applied to all cases.
-    per_turbines : list or None
-        Optional per-turbine baselines.
+    per_turbines : list or bool
+        Per-turbine baselines.
     connectivity : str
         PyG connectivity type used to build each graph.
 
@@ -593,10 +604,48 @@ def graph_maker_lut(
         for wd, ws in product(wds, wss)
     ]
 
+    # generate PyWake-vectorized baseline
+    if per_turbines is True:
+        logging.info("Generating baseline with 0-yaw PyWake")
+        from utils.get_flowmodel import get_flowmodel
+        from utils.iea22s import IEA22s
+
+        wt = IEA22s()
+        wffm = get_flowmodel(wt=wt)
+        yaw_baseline = np.zeros(len(x))
+        WS_eff, TI_eff, Power, CT, _, _ = wffm(
+            x,
+            y,
+            yaw=yaw_baseline,
+            wd=wds,  # after rotation
+            ws=wss,
+            TI=TI,
+            tilt=0,
+            return_simulationResult=False,
+            n_cpu=num_threads,
+        )  # WS_eff_ilk, TI_eff_ilk, power_ilk, ct_ilk, localWind, kwargs_ilk
+        n_wt = len(x)
+        n_wd = len(wds)
+        n_ws = len(wss)
+
+        assert WS_eff.shape == (n_wt, n_wd, n_ws)
+
+        per_turbines = [
+            {
+                "WS_eff": WS_eff[:, i_wd, j_ws],
+                "TI_eff": TI_eff[:, i_wd, j_ws],
+                "Power": Power[:, i_wd, j_ws],
+                "CT": CT[:, i_wd, j_ws],
+            }
+            for i_wd in range(n_wd)  # wd-major
+            for j_ws in range(n_ws)
+        ]
+        assert len(per_turbines) == len(inflows) == n_wd * n_ws
+
     graphs = generate_graphs(
         layouts=layouts,
         inflows=inflows,
-        num_threads=-1,
+        num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=per_turbines,  # None for pywake baseline# y shape (5, n_wt)
         connectivity="delaunay",
@@ -606,7 +655,7 @@ def graph_maker_lut(
     return graphs
 
 
-def test_cases_graph(wd_=270):
+def test_cases_graph(wd_=270, num_threads=0):
     """
     Create a small set of random layouts for smoke testing.
 
@@ -652,7 +701,7 @@ def test_cases_graph(wd_=270):
     graphs = generate_graphs(
         layouts=layouts,
         inflows=inflows,
-        num_threads=-1,
+        num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=True,  # y shape (5, n_wt)
         connectivity="delaunay",
