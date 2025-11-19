@@ -239,7 +239,7 @@ def process_one_layout(
     )
 
     if per_turbine_dict is False:
-        from utils.iea22s import IEA22s
+        from design_friendly.utils.iea22s import IEA22s
 
         warnings.warn("ambient-only wip. Repeating ambient for node features")
         wt = IEA22s()
@@ -249,8 +249,8 @@ def process_one_layout(
         per_turbine_dict["Power"] = np.repeat(wt.Power(ws=WS))
         per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS))
     elif per_turbine_dict is True:
-        from utils.get_flowmodel import get_flowmodel
-        from utils.iea22s import IEA22s
+        from design_friendly.utils.get_flowmodel import get_flowmodel
+        from design_friendly.utils.iea22s import IEA22s
 
         wt = IEA22s()
         wffm = get_flowmodel(wt=wt)
@@ -607,8 +607,8 @@ def graph_maker_lut(
     # generate PyWake-vectorized baseline
     if per_turbines is True:
         logging.info("Generating baseline with 0-yaw PyWake")
-        from utils.get_flowmodel import get_flowmodel
-        from utils.iea22s import IEA22s
+        from design_friendly.utils.get_flowmodel import get_flowmodel
+        from design_friendly.utils.iea22s import IEA22s
 
         wt = IEA22s()
         wffm = get_flowmodel(wt=wt)

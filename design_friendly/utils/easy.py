@@ -1,9 +1,9 @@
 from itertools import product
 
 import numpy as np
-from utils.pred import predict
-from utils.to_graph import graph_maker_lut
-
+from design_friendly.utils.pred import predict
+from design_friendly.utils.to_graph import graph_maker_lut
+from design_friendly.models import models_filepath
 
 def easy_yaw_gnn(
     x,
@@ -11,7 +11,7 @@ def easy_yaw_gnn(
     wd,
     ws,
     TI,
-    model_path="models/best.pt",
+    model_path=models_filepath + "best.pt",
     num_threads=0,
 ):
     n_wt = len(x)
@@ -33,7 +33,7 @@ def easy_yaw_gnn(
 
 
 def main():
-    from utils.sites import Hornsrev1Site
+    from design_friendly.utils.sites import Hornsrev1Site
 
     wds = np.arange(0, 360, 2)
     wss = np.arange(3, 25, 1)
