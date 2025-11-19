@@ -5,6 +5,7 @@ from design_friendly.utils.pred import predict
 from design_friendly.utils.to_graph import graph_maker_lut
 from design_friendly.models import models_filepath
 
+
 def easy_yaw_gnn(
     x,
     y,
@@ -13,6 +14,7 @@ def easy_yaw_gnn(
     TI,
     model_path=models_filepath + "best.pt",
     num_threads=0,
+    batch_size=1,
 ):
     n_wt = len(x)
     graphs = graph_maker_lut(
@@ -26,7 +28,7 @@ def easy_yaw_gnn(
     results = predict(
         model_path=model_path,
         test_graphs=graphs,
-        batch_size=int(len(wd) * len(ws)),
+        batch_size=batch_size,  # int(len(wd) * len(ws)),
         reshape=(n_wt, len(wd), len(ws)),
     )
     return results
