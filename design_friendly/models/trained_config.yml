@@ -1,0 +1,44 @@
+run_settings:
+  validate: true
+  num_t_workers: 26
+  num_v_workers: 6
+io_settings:
+  run_dir: ./runs
+  save_epochs: 1
+hyperparameters:
+  epochs: 50
+  start_lr: 1e-4
+  lr_decay_stop: 200
+  batch_size: 128
+  norm_type: mean_std
+  edge_feature_dim: 2
+  glob_feature_dim: 2
+  node_out_dim: 1
+model_settings:
+  node_latent_dim: 256
+  edge_latent_dim: 256
+  glob_latent_dim: 256
+  encoder_settings:
+    node_enc_mlp_layers:
+    - 256
+    - 256
+    edge_enc_mlp_layers:
+    - 256
+    - 256
+    glob_enc_mlp_layers:
+    - 256
+    - 256
+    dropout: 0.0
+  processor_settings:
+    mp_type: GEN
+    num_mp_steps: 4
+    dropout: 0.0
+    mp_aggr: softmax
+  decoder_settings:
+    node_dec_mlp_layers:
+    - 256
+    - 256
+    glob_dec_mlp_layers:
+    - 256
+    - 256
+    dropout: 0.0

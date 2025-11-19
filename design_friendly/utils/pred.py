@@ -17,14 +17,21 @@ def predict(
     Predict with a trained WindFarmGNN on an in-memory test set.
     """
     model_dir = os.path.dirname(model_path)
-    cfg_path = os.path.join(model_dir, "config.yml")
-    with open(cfg_path) as f:
-        config = yaml.safe_load(f)
+    try:  # fix later
+        cfg_path = os.path.join(model_dir, "trained_config.yml")
+        with open(cfg_path) as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError as e:
+        cfg_dir = os.path.dirname(model_dir)
+        cfg_path = os.path.join(cfg_dir, "trained_config.yml")
+        with open(cfg_path) as f:
+            config = yaml.safe_load(f)
+
     test_dataset = test_graphs
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
-        shuffle=False,  # to recover order
+        shuffle=False,
         num_workers=0,
         pin_memory=False,
         persistent_workers=False,
@@ -61,14 +68,7 @@ def predict(
             reshape[1],
             reshape[2],
             reshape[0],
-        ).transpose(2, 0, 1)
-        if temp_ret_all:
-            return (
-                y,
-                y_pred,
-                aILK,
-                data,
-            )
+        ).transpose(2, 0, 1)  # TODO: hardcoded for windrose LUT
         return aILK
     return y_pred
 
@@ -81,7 +81,6 @@ def main():
     results = predict(
         model_path=model_path,
         test_graphs=graphs,  # in-memory graphs
-        model_version="best",
     )
     # visualize
     from py_wake import HorizontalGrid

@@ -43,3 +43,6 @@ docs/_tags/*
 *_scratch.ipynb
 *_draft.py
 *_draft.ipynb
+
+*/runs/*
+

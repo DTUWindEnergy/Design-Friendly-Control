@@ -56,8 +56,7 @@ def geometric_median(x, y):
     Returns
     -------
     center : ndarray, shape (2,)
-        Coordinates of the central point (existing point minimizing
-        the sum of Euclidean distances to all points).
+        Coordinates of the central point (argmin distance to all points).
 
     Notes
     -----

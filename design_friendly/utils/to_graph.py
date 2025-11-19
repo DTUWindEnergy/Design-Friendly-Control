@@ -36,8 +36,7 @@ def geometric_median(x, y):
     Returns
     -------
     center : ndarray, shape (2,)
-        Coordinates of the central point (existing point minimizing
-        the sum of Euclidean distances to all points).
+        Coordinates of the central point (argmin distance to all points).
     """
 
     P = np.column_stack([x, y])  # (n,2)
@@ -225,7 +224,12 @@ def process_one_layout(
     if target_dict is None:
         target_dict = {"yaw": np.repeat(np.nan, n_wt)}
     elif isinstance(target_dict, dict):
-        if np.any([np.isnan(v) for k, v in target_dict.items()]):
+        # if np.any([np.isnan(v) for k, v in target_dict.items()]):
+        if any(np.isnan(v).any() for v in target_dict.values()):
+            bad_keys = [k for k, v in target_dict.items() if np.isnan(v).any()]
+            if bad_keys:
+                raise ValueError(f"NaNs found in target_dict for keys: {bad_keys}")
+
             warnings.warn("nan in target_dict. Filling all targets nan for prediction")
             target_dict = {k: np.repeat(np.nan, n_wt) for k, v in target_dict.items()}
     else:
