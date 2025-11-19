@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 import yaml
-from gnn import WindFarmGNN  # GNN model class
+from design_friendly.gnn import WindFarmGNN  # GNN model class
 from torch_geometric.loader import DataLoader
 
 

@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-from .decoder import Decoder
-from .encoder import Encoder
-from .processor import Processor
+from design_friendly.gnn.decoder import Decoder
+from design_friendly.gnn.encoder import Encoder
+from design_friendly.gnn.processor import Processor
 
 
 class WindFarmGNN(nn.Module):

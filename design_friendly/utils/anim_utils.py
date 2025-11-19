@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib.animation import FFMpegWriter
 from PIL import Image
 from py_wake import HorizontalGrid
-from utils.plot_utils import pretty_flowmap
+from design_friendly.utils.plot_utils import pretty_flowmap
 
 
 def save_mp4_from_figs(

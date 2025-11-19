@@ -1,5 +1,5 @@
 import torch.nn as nn
-from .basics import MLP
+from design_friendly.gnn.basics import MLP
 
 class Decoder(nn.Module):
     ''' Decoder class, uses MLPs for each graph attribute
