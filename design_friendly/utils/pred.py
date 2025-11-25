@@ -1,43 +1,54 @@
 import os
+
 import numpy as np
 import torch
 import yaml
 from design_friendly.gnn import WindFarmGNN  # GNN model class
+from design_friendly.utils.misc import log_execution_time
 from torch_geometric.loader import DataLoader
 
 
+@log_execution_time
 def predict(
     model_path,
-    test_graphs,
+    graphfarms,
     batch_size=1,
     reshape=None,
-    temp_ret_all=None,
+    append_latent=True,
 ):
     """
     Predict with a trained WindFarmGNN on an in-memory test set.
     """
     model_dir = os.path.dirname(model_path)
-    try:  # fix later
-        cfg_path = os.path.join(model_dir, "trained_config.yml")
-        with open(cfg_path) as f:
-            config = yaml.safe_load(f)
-    except FileNotFoundError as e:
-        cfg_dir = os.path.dirname(model_dir)
-        cfg_path = os.path.join(cfg_dir, "trained_config.yml")
-        with open(cfg_path) as f:
-            config = yaml.safe_load(f)
-
-    test_dataset = test_graphs
+    search_roots = [model_dir, os.path.dirname(model_dir)]
+    cfg_fns = ["trained_config.yml", "config.yml"]
+    cfg_path = None
+    for root_dir in search_roots:
+        if not root_dir:
+            continue
+        for root, _, files in os.walk(root_dir):
+            for name in cfg_fns:
+                if name in files:
+                    cfg_path = os.path.join(root, name)
+                    break
+            if cfg_path is not None:
+                break
+        if cfg_path is not None:
+            break
+    if cfg_path is None:
+        raise FileNotFoundError(f"trained_config.yml not found undesr {model_dir!r}")
+    with open(cfg_path) as f:
+        config = yaml.safe_load(f)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_loader = DataLoader(
-        test_dataset,
+        graphfarms,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=False,
+        pin_memory=(device.type == "cuda"),
         persistent_workers=False,
     )
     model = WindFarmGNN(**config["hyperparameters"], **config["model_settings"])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(
         os.path.join(model_path),
         map_location=device,
@@ -45,31 +56,47 @@ def predict(
     model.trainset_stats = checkpoint["trainset_stats"]
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    num_t_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print("Number of trainable parameters:", num_t_params)
-
+    # num_t_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # print("Number of trainable parameters:", num_t_params)
+    # model = torch.compile(model)
     model.to(device)
     model.eval()
 
     y = []
     y_pred = []
 
-    with torch.no_grad():
+    with torch.inference_mode():
         print(f"Evaluating model {model_path}")
         for i_batch, data in enumerate(test_loader):
             data = data.to(device)
-            data, latent_x = model(data, denorm_output=True, return_latent=True)
+            if append_latent:
+                data, latent_x = model(data, denorm_output=True, return_latent=True)
+                data.latent_x = latent_x
+            else:
+                data = model(data, denorm_output=True, return_latent=False)
             y += [data.y.squeeze().cpu().numpy()]
             y_pred += [data.x.squeeze().cpu().numpy()]
     if reshape is not None:
-        flat = np.concatenate(y_pred)
-        # reshape ilk: (len(wt), len(wd), len(ws))
-        aILK = flat.reshape(
-            reshape[1],
-            reshape[2],
-            reshape[0],
-        ).transpose(2, 0, 1)  # TODO: hardcoded for windrose LUT
-        return aILK
+        if len(reshape) == 3:
+            flat = np.concatenate(y_pred)
+            # reshape ilk: (len(wt), len(wd), len(ws))
+            aILK = flat.reshape(
+                reshape[1],
+                reshape[2],
+                reshape[0],
+            ).transpose(2, 0, 1)  # TODO: hardcoded for windrose LUT
+            return aILK
+        elif len(reshape) == 2:
+            flat = np.concatenate(y_pred)
+            # reshape ilk: (len(wt), len(t_s))
+            aILK = flat.reshape(
+                reshape[1],
+                reshape[0],
+            ).transpose(1, 0)  # TODO: hardcoded for timeseries
+            return aILK
+        else:
+            raise ValueError("not implemented")
+
     return y_pred
 
 

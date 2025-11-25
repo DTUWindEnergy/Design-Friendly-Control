@@ -46,3 +46,6 @@ docs/_tags/*
 
 */runs/*
 
+design_friendly/validationset_allepoch.csv
+design_friendly/validationset_draft.csv
+design_friendly/subset_wds_sweep_wss7.mp4

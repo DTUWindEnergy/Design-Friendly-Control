@@ -26,60 +26,47 @@ class WindFarmGNN(nn.Module):
             "norm_type",
         }.issubset(kwargs)
         assert kwargs["norm_type"] in ["mean_std", "min_max"]
-
-        # init the encoder, processor and decoder
         self.encoder = Encoder(**kwargs, **kwargs["encoder_settings"])
         self.processor = Processor(**kwargs, **kwargs["processor_settings"])
         self.decoder = Decoder(**kwargs, **kwargs["decoder_settings"])
-
-        # init the dataset stats dict and the type of normalization to use (mean_std or min_max)
-        self.trainset_stats = None
+        self.trainset_stats = None  # normalization
         self.norm_type = kwargs["norm_type"]
 
     def forward(self, data, denorm_output=False, return_latent=False):
         assert all(hasattr(data, attr) for attr in ["edge_index", "edge_attr", "batch"])
-        # first normalize the input data
-        assert not torch.isnan(data.edge_attr).any(), "NaNs: edge_attr"
-        assert not torch.isnan(data.globals).any(), "NaNs: globals"
-        # assert not torch.isnan(data.x).any(), "NaNs: x"  # None for ambient only
-        # print("normalize input data.x:", data.x)
-        # print(data.globals)
+
+        def _tensors(d):  # x can be None for ambient-only; skip None
+            return [
+                t
+                for t in (
+                    getattr(d, "edge_attr", None),
+                    getattr(d, "globals", None),
+                    getattr(d, "x", None),
+                )
+                if t is not None
+            ]
+
+        assert not any(torch.isnan(t).any() for t in _tensors(data)), (
+            "NaNs before forward"
+        )
         data = self.normalize_input(data)
-        assert not torch.isnan(data.edge_attr).any(), "NaNs after normalize edge_attr"
-        # assert not torch.isnan(data.globals).any(), "NaNs after normalize globals"
-        # assert not torch.isnan(data.x).any(), "NaNs after normalize x"  # None for ambient only
-
-        # encode the mesh nodes, edges and globals to their latent forms
-        # make sure we actually got tensors back
-        # assert data.x is not None, "Encoder returned data.x = None"  # None for ambient only
-        assert data.edge_attr is not None, "Encoder returned data.edge_attr = None"
+        # encode
         data.x, data.edge_attr = self.encoder(data.edge_attr, data.globals, data.batch)
-        # assert not torch.isnan(data.x).any(), "x NaNs after encoder"  # None for ambient only
-        assert not torch.isnan(data.edge_attr).any(), "edge_attr NaNs after encoder"
-
         # message-passing processor to update node features of the encoded graph
         data.x = self.processor(data.x, data.edge_index, data.edge_attr)
-        assert not torch.isnan(data.x).any(), (
-            "NaNs after processor"
-        )  # None for ambient only
-
         # decode the graph after each group to the original space
         data.x = self.decoder(data.x)
-        assert not torch.isnan(data.x).any(), (
-            "NaNs after decoder"
-        )  # None for ambient only
-
-        # denormalize the output for final prediction if needed
         if denorm_output:
             data = self.denormalize_output(data)
+        assert not any(torch.isnan(t).any() for t in _tensors(data)), (
+            "NaNs after forward"
+        )
         if return_latent:
             return data, data.x
         return data
 
     def compute_loss(self, data):
-        # computes the loss for a given batch of data
-        # print("data.x is:", data.x, "data.y is:", data.y)
-        # print("data.x shape is:", data.x.shape, "data.y shape is:", data.y.shape)
+        # loss on batch
         node_loss = nn.functional.mse_loss(
             data.x.squeeze(), data.y.squeeze(), reduction="mean"
         )
@@ -89,12 +76,6 @@ class WindFarmGNN(nn.Module):
         # methd to normalize the input data using the precomputed trainset_stats
         if self.trainset_stats is None:
             raise RuntimeError("Dataset stats not initialized yet!")
-
-        # normalize the x, y, edge attributes and globals values
-        # print("data.x is:", data.x, "data.y is:", data.y)
-        # print("data.x shape is:", data.x.shape, "data.y shape is:", data.y.shape)
-        # print(self.trainset_stats["x"].shape, self.trainset_stats["y"].shape)
-        # print(self.trainset_stats["globals"].shape, self.trainset_stats["edges"].shape)
         if self.norm_type == "mean_std":
             if self.trainset_stats["x"] is not None:
                 data.x = (

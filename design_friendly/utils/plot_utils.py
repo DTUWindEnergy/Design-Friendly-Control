@@ -1,16 +1,17 @@
+import warnings
+
+import matplotlib as mpl
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
+import xarray as xr
 from matplotlib.collections import LineCollection
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.legend_handler import HandlerBase, HandlerLine2D
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, FancyArrowPatch
 from matplotlib.ticker import FuncFormatter
-import matplotlib as mpl
-import warnings
-import xarray as xr
 
 BASE_FONTSIZE = 14  # or 16, 18, tweak to taste
 
@@ -69,7 +70,7 @@ def pretty_flowmap(
     cs = ax.contourf(
         Xg, Yg, Z, levels=np.linspace(vmin, vmax, levels), cmap=cmap, norm=norm
     )
-    ax.scatter(x, y, c="k", s=D/50)
+    ax.scatter(x, y, c="k", s=D / 50)
 
     if add_colorbar:
         cbar = fig.colorbar(cs, ax=ax, pad=0.005, shrink=0.5, aspect=20)
@@ -92,7 +93,6 @@ def pretty_flowmap(
         segs, colors="black", linewidths=2.0, capstyle="round", zorder=4
     )
     ax.add_collection(lc)
-
 
     class HandlerVerticalLine(HandlerLine2D):
         def create_artists(self, legend, orig, xd, yd, w, h, fs, trans):
@@ -238,47 +238,49 @@ def pretty_flowmap(
     return fig, ax
 
 
+import matplotlib.pyplot as plt
+import numpy as np
+
+
 def lut_heatmap(rose_ilk):
     """
-    rose_ilk: array-like with columns [WD_bin (degrees, 0-359), WS_bin (e.g., 3-25), yaw_0]
+    rose_ilk: array-like with columns [WD_bin (degrees, 0-359), WS_bin, yaw_0]
     """
-    wd = rose_ilk[:, 0]
-    ws = rose_ilk[:, 1]
+    rose_ilk = np.asarray(rose_ilk, dtype=float)
+
+    wd = rose_ilk[:, 0] % 360.0  # WD-major (assumed from np.arange)
+    ws = rose_ilk[:, 1]  # WS-minor (assumed from np.arange)
     yaw = rose_ilk[:, 2]
-    ws_step = 1
-    wd_step = 1
 
-    wsin = 1
-    wsout = 14
-    wds = np.arange(0, 360, wd_step)  # wind direction centers (degrees)
-    wss = np.arange(wsin, wsout, ws_step)  # wind speed centers
-    theta_edges = np.deg2rad(np.arange(0, 361, wd_step))  # 0..360 deg edges in radians
-    r_edges = np.arange(wsin - 0.5, wsout, wd_step)  # wind speed edges (3±0.5)
-    warnings.warn("lut_heatmap assumes rose_ilk ws columns starts at 3m/s????")
-    sum_grid = np.zeros((len(wss), len(wds)), dtype=float)
-    count_grid = np.zeros_like(sum_grid)
+    wd0 = wd.min()
+    ws0 = ws.min()
+    wd_step = wd[1] - wd[0] if len(wd) > 1 else 360.0
+    ws_step = ws[1] - ws[0] if len(ws) > 1 else 1.0
 
-    wd_idx = (np.floor(wd) % 360).astype(int)
-    ws_idx = (np.floor(ws) - wsin).astype(int)  # since wss starts at 3
+    n_wd = int(round((wd.max() - wd0) / wd_step)) + 1
+    n_ws = int(round((ws.max() - ws0) / ws_step)) + 1
 
-    valid = (ws_idx >= 0) & (ws_idx < len(wss))
-    for wi, di, val in zip(ws_idx[valid], wd_idx[valid], yaw[valid]):
-        sum_grid[wi, di] += val
-        count_grid[wi, di] += 1
+    wds = wd0 + wd_step * np.arange(n_wd)
+    wss = ws0 + ws_step * np.arange(n_ws)
+    wd_idx = ((wd - wd0) / wd_step).astype(int)
+    ws_idx = ((ws - ws0) / ws_step).astype(int)
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        C = sum_grid / count_grid  # shape (23, 360); missing bins are NaN
+    # 2D LUT: rows = WS bins, cols = WD bins
+    C = np.full((n_ws, n_wd), np.nan)
+    C[ws_idx, wd_idx] = yaw
+
+    theta_edges = np.deg2rad(wd0 - wd_step / 2.0 + wd_step * np.arange(n_wd + 1))
+    r_edges = ws0 - ws_step / 2.0 + ws_step * np.arange(n_ws + 1)
+    Theta, R = np.meshgrid(theta_edges, r_edges)
 
     fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(projection="polar"))
-    Theta, R = np.meshgrid(theta_edges, r_edges)
     pcm = ax.pcolormesh(Theta, R, C, cmap="plasma", shading="auto")
     cbar = fig.colorbar(pcm, ax=ax)
     cbar.set_label("Yaw Offset [%]")
-
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rlabel_position(135)
-    ax.set_ylim(wss[0], wss[-1] + 0.5)
+    ax.set_ylim(r_edges[0], r_edges[-1])
     ax.set_yticks(wss)
     ax.set_xticks(np.deg2rad(np.arange(0, 360, 45)))
     plt.tight_layout()
@@ -287,8 +289,6 @@ def lut_heatmap(rose_ilk):
 
 
 def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15):
-    plt.ion()  # Enable interactive mode
-
     if wds is None or wss is None:
         wds = np.arange(0, 360, 1)
         wss = np.arange(3, 12, 1)
@@ -310,7 +310,3 @@ def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15):
     plt.tight_layout()
     ax.set_ylim(0, 16)
     plt.show()
-    plt.ioff()  # Disable interactive mode
-
-
-# lut_3d_heatmap(hkn_yaw[0])

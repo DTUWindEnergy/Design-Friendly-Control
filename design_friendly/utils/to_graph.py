@@ -18,6 +18,8 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 from tqdm_joblib import tqdm_joblib
 import logging
+from design_friendly.utils.misc import log_execution_time
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # or DEBUG
@@ -171,7 +173,7 @@ def gen_graph_edges(
 def process_one_layout(
     layout,
     inflow,
-    per_turbine_dict=True,
+    per_turbine_dict=False,
     target_dict=None,
     layout_id="default",
     connectivity="delaunay",
@@ -242,16 +244,17 @@ def process_one_layout(
         wd=WD,  # for rotation
     )
 
-    if per_turbine_dict is False:
+    if per_turbine_dict is False:  # (TODO: allow empty g.x TODO @EPD)
+        # workaround: padding per_turbines
+        # values don't matter at all but here we go
         from design_friendly.utils.iea22s import IEA22s
 
-        warnings.warn("ambient-only wip. Repeating ambient for node features")
         wt = IEA22s()
         per_turbine_dict = {}
-        per_turbine_dict["WS"] = np.repeat(WS, n_wt)
-        per_turbine_dict["TI"] = np.repeat(TI, n_wt)
-        per_turbine_dict["Power"] = np.repeat(wt.Power(ws=WS))
-        per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS))
+        per_turbine_dict["WS_eff"] = np.repeat(WS, n_wt)
+        per_turbine_dict["TI_eff"] = np.repeat(TI, n_wt)
+        per_turbine_dict["Power"] = np.repeat(wt.power(ws=WS), n_wt)
+        per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS), n_wt)
     elif per_turbine_dict is True:
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s
@@ -325,12 +328,13 @@ def process_one_layout(
     return g
 
 
+@log_execution_time
 def generate_graphs(
     layouts,  # list of layout dicts
     inflows,  # list of inflow dicts
     num_threads=0,
     target_dicts=None,
-    per_turbines=True,  # list of per_turbine dicts
+    per_turbines=False,  # list of per_turbine dicts
     connectivity="delaunay",
     yaws_model="COBYQA-QMCB",  # meta info
     save_pt_path=None,
@@ -349,6 +353,9 @@ def generate_graphs(
         Number of threads for parallel conversion.
     per_turbines : list of dict or bool
         Optional per-turbine baselines matching layouts.
+        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        True: calculate baseline node features w PyWake
+        dict of np.array: use as node features
     connectivity : str, default 'delaunay'
         Graph connectivity scheme for all layouts.
     yaws_model : str
@@ -501,13 +508,14 @@ class GraphFarmsDataset(Dataset):
         return data
 
 
+@log_execution_time
 def graph_maker_sequential(
     xs,
     ys,
     wds,
     wss,
     TIs,
-    per_turbines=True,  # precalculated node features
+    per_turbines=False,  # precalculated node features
     target_dicts=None,
     connectivity="delaunay",
     num_threads=0,
@@ -529,6 +537,9 @@ def graph_maker_sequential(
         Turbulence intensities per layout.
     per_turbines : list of dict of np.array or None
         Optional pre-calculated per-turbine baselines (0yaw) for each layout.
+        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        True: calculate baseline node features w PyWake
+        dict of np.array: use as node features
     connectivity : str
         connectivity type for all cases.
 
@@ -561,20 +572,22 @@ def graph_maker_sequential(
     return graphs
 
 
-def graph_maker_lut(
+@log_execution_time
+def graph_maker_time(
     x,
     y,
-    wds,
-    wss,
-    TI,  # single TI for now
+    wd_t,
+    ws_t,
+    TI_t,
     target_dicts=None,
-    per_turbines=True,
+    per_turbines=False,
     connectivity="delaunay",
     num_threads=0,
 ):
     """
     Build a lookup table of graphs over wind direction/speed combinations for specific WF
-    coordinates. format inputs and call generate_graphs
+    coordinates. format inputs and call generate_graphs. graph_maker should use the same
+    input as PyWake whenever possible
 
     Parameters
     ----------
@@ -590,6 +603,111 @@ def graph_maker_lut(
         Turbulence intensity applied to all cases.
     per_turbines : list or bool
         Per-turbine baselines.
+        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        True: calculate baseline node features w PyWake
+        dict of np.array: use as node features
+    connectivity : str
+        PyG connectivity type used to build each graph.
+
+    Returns
+    -------
+    GraphSet
+        Graphs across the provided WD/WS combinations.
+    """
+    if len(TI_t) == 1:
+        TI_t = np.ones_like(wd_t) * TI_t
+    assert len(wd_t) == len(ws_t) == len(TI_t)
+    n_ts = len(wd_t)
+    coords = [np.column_stack((x, y))] * n_ts  # repeat coordinates for gnn input
+    layouts = [{"coords": c, "form": "test"} for c in coords]
+
+    inflows = [
+        {"WS": float(ws), "TI": float(TI), "WD": float(wd)}
+        for wd, ws, TI in zip(wd_t, ws_t, TI_t)
+    ]
+
+    # generate PyWake-vectorized baseline
+    if per_turbines is True:
+        logging.info("Generating baseline with 0-yaw PyWake")
+        from design_friendly.utils.get_flowmodel import get_flowmodel
+        from design_friendly.utils.iea22s import IEA22s
+
+        wt = IEA22s()
+        wffm = get_flowmodel(wt=wt)
+        yaw_baseline = np.zeros(len(x))
+        WS_eff, TI_eff, Power, CT, _, _ = wffm(
+            x,
+            y,
+            yaw=yaw_baseline,
+            wd=wd_t,  # after rotation
+            ws=ws_t,
+            TI=TI_t,
+            tilt=0,
+            time=True,
+            return_simulationResult=False,
+            n_cpu=num_threads,
+        )  # WS_eff_ilk, TI_eff_ilk, power_ilk, ct_ilk, localWind, kwargs_ilk
+        n_wt = len(x)
+        assert WS_eff.squeeze().shape == (n_wt, n_ts)
+
+        per_turbines = [
+            {
+                "WS_eff": WS_eff[:, i_t],
+                "TI_eff": TI_eff[:, i_t],
+                "Power": Power[:, i_t],
+                "CT": CT[:, i_t],
+            }
+            for i_t in range(n_ts)
+        ]
+        assert len(per_turbines) == len(inflows) == n_ts
+
+    graphs = generate_graphs(
+        layouts=layouts,
+        inflows=inflows,
+        num_threads=num_threads,
+        target_dicts=target_dicts,
+        per_turbines=per_turbines,  # None for pywake baseline# y shape (5, n_wt)
+        connectivity="delaunay",
+        yaws_model="COBYQA-QMCB",
+        save_pt_path=None,
+    )
+    return graphs
+
+
+@log_execution_time
+def graph_maker_lut(
+    x,
+    y,
+    wds,
+    wss,
+    TI,  # single TI for now
+    target_dicts=None,
+    per_turbines=False,
+    connectivity="delaunay",
+    num_threads=0,
+):
+    """
+    Build a lookup table of graphs over wind direction/speed combinations for specific WF
+    coordinates. format inputs and call generate_graphs. graph_maker should use the same
+    input as PyWake whenever possible
+
+    Parameters
+    ----------
+    x : array_like
+        WF layout X coordinates.
+    y : array_like
+        WF layout Y coordinates.
+    wds : Sequence[float]
+        Wind directions to iterate.
+    wss : Sequence[float]
+        Wind speeds to iterate.
+    TI : float
+        Turbulence intensity applied to all cases.
+    per_turbines : list or bool
+        Per-turbine baselines.
+        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        True: calculate baseline node features w PyWake
+        dict of np.array: use as node features
     connectivity : str
         PyG connectivity type used to build each graph.
 
@@ -659,6 +777,7 @@ def graph_maker_lut(
     return graphs
 
 
+@log_execution_time
 def test_cases_graph(wd_=270, num_threads=0):
     """
     Create a small set of random layouts for smoke testing.
