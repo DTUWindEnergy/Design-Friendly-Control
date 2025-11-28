@@ -244,18 +244,18 @@ def process_one_layout(
         wd=WD,  # for rotation
     )
 
-    if per_turbine_dict is False:  # (TODO: allow empty g.x TODO @EPD)
-        # workaround: padding per_turbines
-        # values don't matter at all but here we go
-        from design_friendly.utils.iea22s import IEA22s
+    # if per_turbine_dict is False:  # (TODO: allow empty g.x TODO @EPD)
+    #     # workaround: padding per_turbines
+    #     # values don't matter at all but here we go
+    #     from design_friendly.utils.iea22s import IEA22s
 
-        wt = IEA22s()
-        per_turbine_dict = {}
-        per_turbine_dict["WS_eff"] = np.repeat(WS, n_wt)
-        per_turbine_dict["TI_eff"] = np.repeat(TI, n_wt)
-        per_turbine_dict["Power"] = np.repeat(wt.power(ws=WS), n_wt)
-        per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS), n_wt)
-    elif per_turbine_dict is True:
+    #     wt = IEA22s()
+    #     per_turbine_dict = {}
+    #     per_turbine_dict["WS_eff"] = np.repeat(WS, n_wt)
+    #     per_turbine_dict["TI_eff"] = np.repeat(TI, n_wt)
+    #     per_turbine_dict["Power"] = np.repeat(wt.power(ws=WS), n_wt)
+    #     per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS), n_wt)
+    if per_turbine_dict is True:
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s
 
@@ -279,34 +279,41 @@ def process_one_layout(
         per_turbine_dict["TI_eff"] = TI_eff
         per_turbine_dict["Power"] = Power
         per_turbine_dict["CT"] = CT
-    elif isinstance(per_turbine_dict, dict):
-        required_keys = {"WS_eff", "TI_eff", "Power", "CT"}
-        missing = required_keys - per_turbine_dict.keys()
-        if missing:
-            raise ValueError(f"per_turbine_dict is missing required keys: {missing}")
+    # elif isinstance(per_turbine_dict, dict):
+    #     required_keys = {"WS_eff", "TI_eff", "Power", "CT"}
+    #     missing = required_keys - per_turbine_dict.keys()
+    #     if missing:
+    #         raise ValueError(f"per_turbine_dict is missing required keys: {missing}")
+    # else:
+    #     raise ValueError("node features not configured")
+    if isinstance(per_turbine_dict, dict):
+        per_turbine_dict = {k: np.ravel(v) for k, v in per_turbine_dict.items()}
+        assert (
+            per_turbine_dict["Power"].shape
+            == per_turbine_dict["CT"].shape
+            == per_turbine_dict["WS_eff"].shape
+            == per_turbine_dict["TI_eff"].shape
+            == (wt_coords.shape[0],)
+        )
+        node_features = np.column_stack([v for v in per_turbine_dict.values()])
+        # node features  # (n_wt, n_node_features)
+        # g.x = torch.tensor(node_features, dtype=torch.float32).T
+        g.x = torch.tensor(node_features, dtype=torch.float32)
     else:
-        raise ValueError("node features not configured")
-    per_turbine_dict = {k: np.ravel(v) for k, v in per_turbine_dict.items()}
-    assert (
-        per_turbine_dict["Power"].shape
-        == per_turbine_dict["CT"].shape
-        == per_turbine_dict["WS_eff"].shape
-        == per_turbine_dict["TI_eff"].shape
-        == (wt_coords.shape[0],)
-    )
+        g.x = None
 
-    node_features = np.column_stack([v for v in per_turbine_dict.values()])
     target_features = np.column_stack([v for v in target_dict.values()])
-    # node features  # (n_wt, n_node_features)
-    # g.x = torch.tensor(node_features, dtype=torch.float32).T
-    g.x = torch.tensor(node_features, dtype=torch.float32)
+
     # target (node) features  # (n_wt, n_target_features)
     g.y = torch.tensor(target_features, dtype=torch.float32)
     # global features  # (2, ) for now
     ambient = np.array([WS, TI], float)
     g.globals = torch.tensor(ambient, dtype=torch.float32)
     # meta data
-    g.node_feature_keys = list(per_turbine_dict.keys())
+    if per_turbine_dict is False:
+        g.node_feature_keys = []
+    else:
+        g.node_feature_keys = list(per_turbine_dict.keys())
     g.target_feature_keys = list(target_dict.keys())
     g.meta = {
         "layout_id": layout_id,
@@ -620,12 +627,10 @@ def graph_maker_time(
     n_ts = len(wd_t)
     coords = [np.column_stack((x, y))] * n_ts  # repeat coordinates for gnn input
     layouts = [{"coords": c, "form": "test"} for c in coords]
-
     inflows = [
         {"WS": float(ws), "TI": float(TI), "WD": float(wd)}
         for wd, ws, TI in zip(wd_t, ws_t, TI_t)
     ]
-
     # generate PyWake-vectorized baseline
     if per_turbines is True:
         logging.info("Generating baseline with 0-yaw PyWake")
@@ -649,7 +654,6 @@ def graph_maker_time(
         )  # WS_eff_ilk, TI_eff_ilk, power_ilk, ct_ilk, localWind, kwargs_ilk
         n_wt = len(x)
         assert WS_eff.squeeze().shape == (n_wt, n_ts)
-
         per_turbines = [
             {
                 "WS_eff": WS_eff[:, i_t],
@@ -749,9 +753,7 @@ def graph_maker_lut(
         n_wt = len(x)
         n_wd = len(wds)
         n_ws = len(wss)
-
         assert WS_eff.shape == (n_wt, n_wd, n_ws)
-
         per_turbines = [
             {
                 "WS_eff": WS_eff[:, i_wd, j_ws],

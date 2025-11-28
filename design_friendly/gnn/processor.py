@@ -121,7 +121,12 @@ class ProcessorBlock(nn.Module):
                 norm="layer",
                 aggr=mp_aggr,
                 num_layers=2,
-            )  # ,  t=1.0, learn_t=True,  # edge_dim=edge_latent_dim
+                t=1.0,
+                learn_t=True,
+                edge_dim=edge_latent_dim,
+                msg_norm=True,
+                learn_msg_scale=True,
+            )
         elif mp_type == "GINE":
             # for GINE we need to define the update function of the node features (a neural network), we use a 2-layer MLP
             gin_mlp = MLP(
@@ -138,9 +143,8 @@ class ProcessorBlock(nn.Module):
         else:
             raise NotImplementedError
 
-        if (
-            mp_type == "GAT"
-        ):  # apply layer norm to the GAT output only (GINE and GEN already have)
+        if mp_type == "GAT":
+            # apply layer norm to the GAT output only (GINE and GEN already have)
             self.norm = nn.LayerNorm(node_latent_dim, elementwise_affine=True)
         else:
             self.norm = nn.Identity()

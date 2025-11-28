@@ -27,6 +27,7 @@ class Encoder(nn.Module):
         # make sure the required arguments are provided
         assert {
             "glob_feature_dim",
+            "node_feature_dim",
             "node_enc_mlp_layers",
             "node_latent_dim",
             "edge_feature_dim",
@@ -34,10 +35,11 @@ class Encoder(nn.Module):
             "edge_latent_dim",
             "dropout",
         }.issubset(kwargs)
+        self.node_feature_dim = kwargs["node_feature_dim"]
 
         # initialize the node, edge and global params encoder MLPs
         self.node_encoder = MLP(
-            kwargs["glob_feature_dim"],
+            kwargs["glob_feature_dim"] + kwargs["node_feature_dim"],
             kwargs["node_enc_mlp_layers"] + [kwargs["node_latent_dim"]],
             activation_type="ReLU",
             norm_type="LayerNorm",
@@ -51,15 +53,29 @@ class Encoder(nn.Module):
             dropout=kwargs["dropout"],
         )
 
-    def forward(self, edge_attr, global_attr, batch):
+    def forward(self, node_attr, edge_attr, global_attr, batch):
         if torch.isnan(edge_attr).any() or torch.isinf(edge_attr).any():
             raise ValueError(f"edge_attr has NaNs or Infs: {edge_attr}")
         if torch.isnan(global_attr).any() or torch.isinf(global_attr).any():
             raise ValueError(f"global_attr has NaNs or InFs: {global_attr}")
+        if node_attr is not None:
+            if torch.isnan(node_attr).any() or torch.isinf(node_attr).any():
+                raise ValueError(f"node_attr has NaNs or InFs: {node_attr}")
+        # number of nodes
+        n_nodes = batch.size(0)
 
-        x_enc = self.node_encoder(global_attr)[
-            batch
-        ]  # the batch index is needed for multi-graph training
+        # if node_attr is not provided, fall back to zeros
+        if node_attr is None:
+            node_attr = global_attr.new_zeros((n_nodes, self.node_feature_dim))
+        # broadcast globals to nodes and concatenate optional node features
+        glob_per_node = global_attr[batch]  # (n_nodes, glob_feature_dim)
+        node_input = torch.cat([glob_per_node, node_attr], dim=-1)
+
+        # x_enc = self.node_encoder(global_attr)[
+        #     batch
+        # ]  # the batch index is needed for multi-graph training
+        x_enc = self.node_encoder(node_input)
+
         edge_attr_enc = self.edge_encoder(edge_attr)
 
         return x_enc, edge_attr_enc

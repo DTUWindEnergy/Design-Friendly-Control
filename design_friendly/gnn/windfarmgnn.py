@@ -51,7 +51,7 @@ class WindFarmGNN(nn.Module):
         )
         data = self.normalize_input(data)
         # encode
-        data.x, data.edge_attr = self.encoder(data.edge_attr, data.globals, data.batch)
+        data.x, data.edge_attr = self.encoder(data.x, data.edge_attr, data.globals, data.batch)
         # message-passing processor to update node features of the encoded graph
         data.x = self.processor(data.x, data.edge_index, data.edge_attr)
         # decode the graph after each group to the original space
@@ -77,7 +77,7 @@ class WindFarmGNN(nn.Module):
         if self.trainset_stats is None:
             raise RuntimeError("Dataset stats not initialized yet!")
         if self.norm_type == "mean_std":
-            if self.trainset_stats["x"] is not None:
+            if (self.trainset_stats["x"] is not None) and (data.x is not None):
                 data.x = (
                     data.x - self.trainset_stats["x"]["mean"]
                 ) / self.trainset_stats["x"]["std"]

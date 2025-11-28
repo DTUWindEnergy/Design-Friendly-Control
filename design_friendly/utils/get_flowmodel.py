@@ -9,6 +9,7 @@ from py_wake.deficit_models.utils import ct2a_mom1d
 import numpy as np
 import warnings
 
+
 def get_flowmodel(wt=None, site=None):
     if site is None:
         site = UniformSite()  # placeholder
@@ -52,14 +53,6 @@ def get_flowmodel(wt=None, site=None):
         turbulenceModel=turbulence_model,
     )
     return wf_model
-
-
-# def get_simres(x, y, wd, ws, TI, yaw, tilt=0, n_cpu=1, wf_model=None, cache=False):
-#     # TODO: hash and cache sim_res to avoid repeating same simulations. this is not a good idea
-#     if wf_model is None:
-#         wf_model = get_flowmodel()
-#         warnings.warn('Using default flow model/wt/site')
-#     return wf_model(x=x, y=y, wd=wd, ws=ws, TI=TI, yaw=yaw, tilt=tilt, n_cpu=n_cpu)
 
 
 if __name__ == "__main__":

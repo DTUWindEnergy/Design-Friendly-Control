@@ -52,6 +52,7 @@ def predict(
     checkpoint = torch.load(
         os.path.join(model_path),
         map_location=device,
+        weights_only=False,
     )
     model.trainset_stats = checkpoint["trainset_stats"]
     model.load_state_dict(checkpoint["model_state_dict"])
@@ -77,18 +78,16 @@ def predict(
             y += [data.y.squeeze().cpu().numpy()]
             y_pred += [data.x.squeeze().cpu().numpy()]
     if reshape is not None:
-        if len(reshape) == 3:
+        if len(reshape) == 3:  # reshape ilk: (len(wt), len(wd), len(ws))
             flat = np.concatenate(y_pred)
-            # reshape ilk: (len(wt), len(wd), len(ws))
             aILK = flat.reshape(
                 reshape[1],
                 reshape[2],
                 reshape[0],
             ).transpose(2, 0, 1)  # TODO: hardcoded for windrose LUT
             return aILK
-        elif len(reshape) == 2:
+        elif len(reshape) == 2:  # reshape ilk: (len(wt), len(t_s))
             flat = np.concatenate(y_pred)
-            # reshape ilk: (len(wt), len(t_s))
             aILK = flat.reshape(
                 reshape[1],
                 reshape[0],

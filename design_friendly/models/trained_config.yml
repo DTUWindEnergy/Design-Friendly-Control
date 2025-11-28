@@ -1,18 +1,17 @@
 run_settings:
   validate: true
-  num_t_workers: 26
-  num_v_workers: 6
 io_settings:
   run_dir: ./runs
   save_epochs: 1
 hyperparameters:
-  epochs: 50
-  start_lr: 1e-4
-  lr_decay_stop: 200
-  batch_size: 128
+  epochs: 40
+  start_lr: 1e-4 # 1e-4
+  lr_decay_stop: 50 # 200
+  batch_size: 128 # 128
   norm_type: mean_std
   edge_feature_dim: 2
   glob_feature_dim: 2
+  node_feature_dim: 4
   node_out_dim: 1
 model_settings:
   node_latent_dim: 256
