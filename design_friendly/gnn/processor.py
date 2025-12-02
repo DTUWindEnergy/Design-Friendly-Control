@@ -121,11 +121,11 @@ class ProcessorBlock(nn.Module):
                 norm="layer",
                 aggr=mp_aggr,
                 num_layers=2,
-                t=1.0,
-                learn_t=True,
+                # t=1.0,
+                # learn_t=True,
                 edge_dim=edge_latent_dim,
-                msg_norm=True,
-                learn_msg_scale=True,
+                # msg_norm=True,
+                # learn_msg_scale=True,
             )
         elif mp_type == "GINE":
             # for GINE we need to define the update function of the node features (a neural network), we use a 2-layer MLP

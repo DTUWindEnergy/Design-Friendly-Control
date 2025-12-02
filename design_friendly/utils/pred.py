@@ -21,7 +21,7 @@ def predict(
     """
     model_dir = os.path.dirname(model_path)
     search_roots = [model_dir, os.path.dirname(model_dir)]
-    cfg_fns = ["trained_config.yml", "config.yml"]
+    cfg_fns = ["config.yml"]
     cfg_path = None
     for root_dir in search_roots:
         if not root_dir:

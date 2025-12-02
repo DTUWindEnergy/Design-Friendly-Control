@@ -276,7 +276,7 @@ def lut_heatmap(rose_ilk):
     fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(projection="polar"))
     pcm = ax.pcolormesh(Theta, R, C, cmap="plasma", shading="auto")
     cbar = fig.colorbar(pcm, ax=ax)
-    cbar.set_label("Yaw Offset [%]")
+    cbar.set_label("Yaw Offset($^o$)")
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rlabel_position(135)
@@ -288,7 +288,7 @@ def lut_heatmap(rose_ilk):
     return fig, ax
 
 
-def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15):
+def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15, ymax=16):
     if wds is None or wss is None:
         wds = np.arange(0, 360, 1)
         wss = np.arange(3, 12, 1)
@@ -299,14 +299,14 @@ def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15):
         C = C.T
 
     c = ax.pcolormesh(
-        theta, r, C, cmap="coolwarm", shading="nearest", vmin=vmin, vmax=vmax
+        theta, r, C, cmap="coolwarm", shading="auto", vmin=vmin, vmax=vmax
     )  # 'BrBG'
     cbar = fig.colorbar(c, ax=ax)
-    cbar.set_label("Yaw Offset[%]")
+    cbar.set_label("Yaw Offset($^o$)")
     ax.set_theta_zero_location("N")  # Set 0 degrees to point north
     ax.set_theta_direction(-1)  # Set clockwise direction
     # Adjust radial label position for better readability
     ax.set_rlabel_position(135)
     plt.tight_layout()
-    ax.set_ylim(0, 16)
+    ax.set_ylim(0, ymax)
     plt.show()
