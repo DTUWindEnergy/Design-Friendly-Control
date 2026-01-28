@@ -1,9 +1,12 @@
-import os
+import logging
 import math
+import os
 import warnings
 from itertools import product
-import numpy as np
+from py_wake import numpy as np
 import torch
+from design_friendly.utils.misc import log_execution_time
+from joblib import Parallel, delayed
 from torch_geometric.data import Data, Dataset
 from torch_geometric.transforms import (
     Cartesian,
@@ -14,18 +17,18 @@ from torch_geometric.transforms import (
     Polar,
 )
 from torch_geometric.utils import dense_to_sparse
-from joblib import Parallel, delayed
 from tqdm import tqdm
 from tqdm_joblib import tqdm_joblib
-import logging
-from design_friendly.utils.misc import log_execution_time
-
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)  # or DEBUG
+logger.setLevel(logging.INFO)  # DEBUG
 
 
 def geometric_median(x, y):
+    """
+    Do we even need this? transfroms.Cartesian is relative anyways.
+    """
+
     """
     Memory intensive way to calculate geometric median (central turbine) based
     inter-distances between all the turbines in the wind farm
@@ -50,7 +53,7 @@ def geometric_median(x, y):
 
 def rotate_to_west_centered(points, wd_deg):
     """
-    Rotate a farm layout so the incoming wind aligns with 270°.
+    Rotate a farm layout so the incoming wind aligns with 270.
 
     Parameters
     ----------
@@ -80,7 +83,7 @@ def rotate_to_west_centered(points, wd_deg):
 
 def unrotate_from_west_centered(rot_pts, wd_deg, center):
     """
-    Restore coordinates before the west-centering rotation.
+    Restore coordinates before the west-centering rotation.e
 
     Parameters
     ----------
@@ -105,19 +108,23 @@ def unrotate_from_west_centered(rot_pts, wd_deg, center):
 
 def gen_graph_edges(
     points: np.array,
-    connectivity: str,
+    connectivity="wake_aware",
     add_edge="cartesian",
     wd=270,
+    rotor_diameter=284,
+    k_wake=0.16,  # 0.10,
+    conn_distxmaxD=None,
+    conn_topk=None,
 ):
     """
-    Build a PyG graph from turbine coordinates.
+    Build a PyG graph edges from turbine coordinates.
 
     Parameters
     ----------
     points : ndarray, shape (n_wt, 2)
         Turbine layout coordinates.
     connectivity : str
-        Connectivity type ('delaunay', 'knn', or 'fully_connected').
+        Connectivity type ('delaunay', 'knn', 'wake_aware', or 'fully_connected').
     add_edge : str, default 'cartesian'
         Edge feature type to attach ('polar', 'cartesian', or 'local cartesian').
     wd : float, default 270
@@ -132,6 +139,7 @@ def gen_graph_edges(
         "delaunay",
         "knn",
         "fully_connected",
+        "wake_aware",
     ]
     points = rotate_to_west_centered(points, wd)
     assert points.shape[1] == 2
@@ -149,10 +157,50 @@ def gen_graph_edges(
     elif connectivity.casefold() == "fully_connected":
         adj = torch.ones(t.shape[0], t.shape[0])
         g = Data(pos=t, edge_index=dense_to_sparse(adj.fill_diagonal_(0))[0])
-    # elif connectivity.casefold() == "wake_aware":  # TODO: implement wake-aware connectivity
-    # TODO: wake aware connectivity: after the rotation, wake expansion follows the wffm-expansion to figure out which turbines are in the wake and generate edge_index accordingly
+    elif connectivity.casefold() == "wake_aware":
+        # connect iff downstream rotor center lies inside an expanding wake cone based.
+        n = t.shape[0]
+        x = t[:, 0]  # (n,)
+        y = t[:, 1]  # (n,)
+        # Pairwise differences: dx[i,j] = x_j - x_i, dy[i,j] = y_j - y_i
+        # Should be able to use Cartesian(norm=False) but not sure how it implements
+        dx = x[None, :] - x[:, None]  # (n, n)
+        dy = y[None, :] - y[:, None]  # (n, n)
+        rotor_diameter = float(rotor_diameter)
+        R = 0.5 * rotor_diameter
+        r_wake = R + float(k_wake) * dx  # (n, n)
+        # Interaction mask: j is downstream of i and within wake radius
+        mask = (dx > 0.0) & (dy.abs() <= r_wake)
+        if conn_distxmaxD is not None:
+            dx_max = float(conn_distxmaxD) * rotor_diameter
+            mask = mask & (dx <= dx_max)
+        mask.fill_diagonal_(False)
+        # directionless, connect i-j if i wakes j OR j wakes i
+        if conn_topk is None:
+            src, dst = mask.nonzero(as_tuple=True)  # directed i->j
+        else:
+            # Keep only top-K upstream "closest" per downstream turbine
+            K = int(conn_topk)
+            k_eff = min(K, n - 1)
+            dist = dx * dx + dy * dy  # dy.abs()
+            cost = dist.masked_fill(~mask, float("inf"))  # (n, n)
+            # For each downstream column j, pick k_eff upstream i with smallest cost[i,j]
+            # (k_eff, n)
+            vals, src_idx = torch.topk(cost, k=k_eff, dim=0, largest=False)
+            dst_idx = torch.arange(n, device=t.device).view(1, n).expand(k_eff, n)
+            valid = torch.isfinite(vals)  # (k_eff, n)
+            src = src_idx[valid]
+            dst = dst_idx[valid]
+        if src.numel() == 0:
+            edge_index = torch.empty((2, 0), dtype=torch.long, device=t.device)
+        else:
+            edge_index = torch.stack(
+                [torch.cat([src, dst]), torch.cat([dst, src])],
+                dim=0,
+            )
+        g = Data(pos=t, edge_index=edge_index)
     else:
-        raise ValueError("available connectivity: 'delaunay', 'knn', 'fully_connected'")
+        raise ValueError("'delaunay', 'knn', 'fully_connected', 'wake_aware'")
 
     add_edge = add_edge.strip().casefold()
     if add_edge == "polar".casefold():
@@ -166,7 +214,6 @@ def gen_graph_edges(
         g = lc(g)
     else:
         raise ValueError("available coord.: 'polar', 'cartesian' or 'local cartesian'")
-
     return g
 
 
@@ -176,11 +223,11 @@ def process_one_layout(
     per_turbine_dict=False,
     target_dict=None,
     layout_id="default",
-    connectivity="delaunay",
-    yaws_model="COBYQA-QMCB",  # meta info
+    connectivity="wake_aware",
+    source_datainfo="robust_slsqp",  # meta info
 ):
     """
-    Convert a single layout and inflow pair into named graphs.
+    Convert a single layout and inflow pair graphs.
 
     Parameters
     ----------
@@ -194,12 +241,12 @@ def process_one_layout(
         None: predict yaw
         dict: target variables to predict
     per_turbine_dict : bool or dict of np.array
-        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        False: repeat ambient features in each node
         True: calculate baseline node features w PyWake
         dict of np.array: use as node features
     connectivity : str, default 'delaunay'
         Graph connectivity scheme to use.
-    yaws_model : str
+    source_datainfo : str
         Model name recorded in graph metadata.
 
     Returns
@@ -207,7 +254,7 @@ def process_one_layout(
     list of graphs
         in-memory graphs.
     """
-    assert connectivity in ["delaunay", "knn", "fully_connected", "all"]
+    assert connectivity in ["delaunay", "knn", "fully_connected", "all", "wake_aware"]
 
     wt_coords = np.asarray(layout["coords"], float)
     info = (
@@ -244,17 +291,6 @@ def process_one_layout(
         wd=WD,  # for rotation
     )
 
-    # if per_turbine_dict is False:  # (TODO: allow empty g.x TODO @EPD)
-    #     # workaround: padding per_turbines
-    #     # values don't matter at all but here we go
-    #     from design_friendly.utils.iea22s import IEA22s
-
-    #     wt = IEA22s()
-    #     per_turbine_dict = {}
-    #     per_turbine_dict["WS_eff"] = np.repeat(WS, n_wt)
-    #     per_turbine_dict["TI_eff"] = np.repeat(TI, n_wt)
-    #     per_turbine_dict["Power"] = np.repeat(wt.power(ws=WS), n_wt)
-    #     per_turbine_dict["CT"] = np.repeat(wt.ct(ws=WS), n_wt)
     if per_turbine_dict is True:
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s
@@ -279,13 +315,6 @@ def process_one_layout(
         per_turbine_dict["TI_eff"] = TI_eff
         per_turbine_dict["Power"] = Power
         per_turbine_dict["CT"] = CT
-    # elif isinstance(per_turbine_dict, dict):
-    #     required_keys = {"WS_eff", "TI_eff", "Power", "CT"}
-    #     missing = required_keys - per_turbine_dict.keys()
-    #     if missing:
-    #         raise ValueError(f"per_turbine_dict is missing required keys: {missing}")
-    # else:
-    #     raise ValueError("node features not configured")
     if isinstance(per_turbine_dict, dict):
         per_turbine_dict = {k: np.ravel(v) for k, v in per_turbine_dict.items()}
         assert (
@@ -297,7 +326,6 @@ def process_one_layout(
         )
         node_features = np.column_stack([v for v in per_turbine_dict.values()])
         # node features  # (n_wt, n_node_features)
-        # g.x = torch.tensor(node_features, dtype=torch.float32).T
         g.x = torch.tensor(node_features, dtype=torch.float32)
     else:
         g.x = None
@@ -318,7 +346,7 @@ def process_one_layout(
     g.meta = {
         "layout_id": layout_id,
         "connectivity": connectivity,
-        "yaws_method": yaws_model,
+        "yaws_method": source_datainfo,
         "info": info,
         "wd_deg": WD,
         "ws": g.globals[0].item(),
@@ -329,7 +357,7 @@ def process_one_layout(
     cstr = lambda v: f"{float(v):.2f}" if hasattr(v, "__float__") else str(v)
     meta_name = lambda d: "_".join(map(cstr, d.values()))
     g.name = meta_name(g.meta)
-    # remove this since we will get nan's predicting g.y without an actual
+    # remove this since we will get nan's predicting g.y without inputs
     if torch.isnan(g.globals).any():  # torch.isnan(g.y).any() or
         raise ValueError("NaNs in graph?")
     return g
@@ -342,8 +370,8 @@ def generate_graphs(
     num_threads=0,
     target_dicts=None,
     per_turbines=False,  # list of per_turbine dicts
-    connectivity="delaunay",
-    yaws_model="COBYQA-QMCB",  # meta info
+    connectivity="wake_aware",
+    source_datainfo="robust_slsqp",  # meta info
     save_pt_path=None,
     return_list_of_graphs=False,
 ):
@@ -360,12 +388,12 @@ def generate_graphs(
         Number of threads for parallel conversion.
     per_turbines : list of dict or bool
         Optional per-turbine baselines matching layouts.
-        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        False: repeat ambient features in each node
         True: calculate baseline node features w PyWake
         dict of np.array: use as node features
     connectivity : str, default 'delaunay'
         Graph connectivity scheme for all layouts.
-    yaws_model : str
+    source_datainfo : str
         Name recorded in graph metadata.
     save_pt_path : str or None
         Optional path to save the GraphFarmsDataset.
@@ -386,9 +414,9 @@ def generate_graphs(
     # if all layouts are the same and per_turbines_dict is not populated (list of Nones or something); run pywake vectorized for inflows (unless per_turbines False)
 
     iter_cases = list(zip(layouts, inflows, per_turbines, target_dicts))
-    if (num_threads == -1) or (num_threads > 1):
+    if (num_threads == -1) or (num_threads > 1) or (num_threads is None):
         with tqdm_joblib(tqdm(desc="Converting to graphs", total=len(iter_cases))):
-            graphs = Parallel(n_jobs=num_threads)(
+            graphs = Parallel(n_jobs=-1)(  # TODO: fix this.
                 delayed(process_one_layout)(
                     layout=layout,
                     inflow=inflow,
@@ -396,7 +424,7 @@ def generate_graphs(
                     target_dict=target_dict,  # None defaults to yaw
                     layout_id=str(i).zfill(7),
                     connectivity=connectivity,
-                    yaws_model=yaws_model,
+                    source_datainfo=source_datainfo,
                 )
                 for i, (layout, inflow, per_turbine, target_dict) in enumerate(
                     iter_cases
@@ -414,7 +442,7 @@ def generate_graphs(
                 target_dict=target_dict,
                 layout_id=str(i).zfill(7),
                 connectivity=connectivity,
-                yaws_model=yaws_model,
+                source_datainfo=source_datainfo,
             )
             graphs.append(g)
     logger.info(f"generated {len(graphs)} graphs from {n_cases} cases")
@@ -438,14 +466,14 @@ class GraphFarmsDataset(Dataset):
         super().__init__()
         entries = None
 
-        # Path to .pt?
         if isinstance(source, (str, os.PathLike)) and str(source).endswith(".pt"):
+            # Path to .pt? not tested
             loaded = torch.load(source, map_location="cpu")
             if isinstance(loaded, list):
                 entries = loaded
             else:
                 raise TypeError("Unsupported .pt contents; expected list of Data")
-        # List of Data
+        # list of Data
         elif isinstance(source, list):
             if len(source) == 0:
                 entries = []
@@ -454,7 +482,7 @@ class GraphFarmsDataset(Dataset):
             else:
                 raise TypeError("List source must be list of Data")
         else:
-            raise TypeError("pass list or .pt path")
+            raise TypeError("pass list of Data or .pt path")
 
         self._entries = entries
         self.__num_graphs = len(self._entries)
@@ -465,7 +493,7 @@ class GraphFarmsDataset(Dataset):
         return [n for n, _ in self._entries]
 
     def items(self):
-        # yields Data with clones so you can mutate safely outside
+        # yields Data with clones to mutate safely outside
         for d in self._entries:
             yield d
 
@@ -504,14 +532,7 @@ class GraphFarmsDataset(Dataset):
         if hasattr(data, "edge_attr") and data.edge_attr is not None:
             data.edge_attr = data.edge_attr.float()
         data.pos = data.pos.float()
-        # if data.globals.float().dim == 1:
         data.globals = data.globals.float().unsqueeze(0)  # (1, G)
-        try:
-            layout_idx = data.layout_id
-        except Exception:
-            layout_idx = -1
-
-        data.provenance = {"name": data.name, "layout_idx": layout_idx}
         return data
 
 
@@ -524,7 +545,7 @@ def graph_maker_sequential(
     TIs,
     per_turbines=False,  # precalculated node features
     target_dicts=None,
-    connectivity="delaunay",
+    connectivity="wake_aware",
     num_threads=0,
 ):
     """
@@ -544,7 +565,7 @@ def graph_maker_sequential(
         Turbulence intensities per layout.
     per_turbines : list of dict of np.array or None
         Optional pre-calculated per-turbine baselines (0yaw) for each layout.
-        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        False: repeat ambient features in each node
         True: calculate baseline node features w PyWake
         dict of np.array: use as node features
     connectivity : str
@@ -556,9 +577,8 @@ def graph_maker_sequential(
         Graphs for each inflow case.
     """
     assert len(wds) == len(wss)
-    # TODO: remove padded NaNs for all inputs!
-    # coords = [np.column_stack((x, y)) for x, y in zip(xs, ys)]
-    coords = [  # drop nan's (padded for xarray dataset)
+    # remove padded NaNs from all inputs (for varying layout sizes)
+    coords = [  # drop nan's (padded for dataset)
         np.column_stack((x[~np.isnan(x)], y[~np.isnan(x)])) for x, y in zip(xs, ys)
     ]
     layouts = [{"coords": c, "form": "PLayGen"} for c in coords]
@@ -572,8 +592,8 @@ def graph_maker_sequential(
         num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=per_turbines,
-        connectivity="delaunay",
-        yaws_model="COBYQA-QMCB",
+        connectivity=connectivity,
+        source_datainfo="robust_slsqp",
         save_pt_path=None,
     )
     return graphs
@@ -588,13 +608,13 @@ def graph_maker_time(
     TI_t,
     target_dicts=None,
     per_turbines=False,
-    connectivity="delaunay",
+    connectivity="wake_aware",
     num_threads=0,
 ):
     """
     Build a lookup table of graphs over wind direction/speed combinations for specific WF
-    coordinates. format inputs and call generate_graphs. graph_maker should use the same
-    input as PyWake whenever possible
+    coordinates. format inputs and call generate_graphs. graph_maker should use the similar
+    inputs as PyWake whenever possible
 
     Parameters
     ----------
@@ -610,7 +630,7 @@ def graph_maker_time(
         Turbulence intensity applied to all cases.
     per_turbines : list or bool
         Per-turbine baselines.
-        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        False: repeat ambient features in each node
         True: calculate baseline node features w PyWake
         dict of np.array: use as node features
     connectivity : str
@@ -619,9 +639,9 @@ def graph_maker_time(
     Returns
     -------
     GraphSet
-        Graphs across the provided WD/WS combinations.
+        Graphs for the provided WD/WS combinations.
     """
-    if len(TI_t) == 1:
+    if TI_t.size == 1:
         TI_t = np.ones_like(wd_t) * TI_t
     assert len(wd_t) == len(ws_t) == len(TI_t)
     n_ts = len(wd_t)
@@ -671,8 +691,8 @@ def graph_maker_time(
         num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=per_turbines,  # None for pywake baseline# y shape (5, n_wt)
-        connectivity="delaunay",
-        yaws_model="COBYQA-QMCB",
+        connectivity=connectivity,
+        source_datainfo="robust_slsqp",
         save_pt_path=None,
     )
     return graphs
@@ -687,13 +707,13 @@ def graph_maker_lut(
     TI,  # single TI for now
     target_dicts=None,
     per_turbines=False,
-    connectivity="delaunay",
+    connectivity="wake_aware",
     num_threads=0,
 ):
     """
     Build a lookup table of graphs over wind direction/speed combinations for specific WF
-    coordinates. format inputs and call generate_graphs. graph_maker should use the same
-    input as PyWake whenever possible
+    coordinates. format inputs and call generate_graphs. graph_maker should use the similar
+    inputs as PyWake whenever possible
 
     Parameters
     ----------
@@ -709,7 +729,7 @@ def graph_maker_lut(
         Turbulence intensity applied to all cases.
     per_turbines : list or bool
         Per-turbine baselines.
-        False: repeat ambient features in each node (TODO: allow empty g.x TODO @EPD)
+        False: repeat ambient features in each node
         True: calculate baseline node features w PyWake
         dict of np.array: use as node features
     connectivity : str
@@ -772,15 +792,15 @@ def graph_maker_lut(
         num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=per_turbines,  # None for pywake baseline# y shape (5, n_wt)
-        connectivity="delaunay",
-        yaws_model="COBYQA-QMCB",
+        connectivity=connectivity,
+        source_datainfo="robust_slsqp",
         save_pt_path=None,
     )
     return graphs
 
 
 @log_execution_time
-def test_cases_graph(wd_=270, num_threads=0):
+def test_cases_graph(wd_=270, num_threads=0, connectivity="wake_aware"):
     """
     Create a small set of random layouts for smoke testing.
 
@@ -829,8 +849,8 @@ def test_cases_graph(wd_=270, num_threads=0):
         num_threads=num_threads,
         target_dicts=target_dicts,
         per_turbines=True,  # y shape (5, n_wt)
-        connectivity="delaunay",
-        yaws_model="COBYQA-QMCB",
+        connectivity=connectivity,
+        source_datainfo="robust_slsqp",
         save_pt_path=None,
     )
 
@@ -849,9 +869,66 @@ def test_cases_graph(wd_=270, num_threads=0):
     return graphs, layouts, inflows
 
 
+@log_execution_time
+def seq_graph_inputs(ds, _slice):
+    """
+    convert ~PyWake xarray ds to graph structure
+    """
+    ds_sel = ds.sel(case=_slice)
+    # edge inputs (per turbine; shape: (n_case, n_wt_max))
+    xs = ds_sel.rob_x.values
+    ys = ds_sel.rob_y.values
+
+    # misc
+    nwts = ds_sel.n_wt.values.astype(int)  # (n_case,)
+
+    # globals (per case; shape: (n_case,))
+    wds = ds_sel.rob_WD.values
+    wss = ds_sel.rob_WS.values
+    TIs = ds_sel.rob_TI.values
+
+    # targets (per turbine; shape: (n_case, n_wt_max))
+    WS_effs = ds_sel.rob_WS_eff.values
+    TI_effs = ds_sel.rob_TI_eff.values
+    yaws = np.round(ds_sel.rob_yaw.values, 4)
+
+    # broadcast globals to per-turbine (shape: (n_case, 1))
+    wss_b = wss[:, None]
+    TIs_b = TIs[:, None]
+
+    # deficit targets (shape: (n_case, n_wt_max))
+    WS_def = wss_b - WS_effs
+    TI_def = TIs_b - TI_effs
+
+    # framework format (variable-length per case)
+    train_target_dicts = [
+        {
+            "WS_eff_def": WS_row_def[:n_wt],
+            "TI_eff_def": TI_row_def[:n_wt],
+            "yaw": yaw_row[:n_wt],  # yaw stays absolute
+        }
+        for WS_row_def, TI_row_def, yaw_row, n_wt in zip(WS_def, TI_def, yaws, nwts)
+    ]
+
+    # assert removing only zeros (padding)
+    assert all(np.isnan(row[n_wt:]).all() for row, n_wt in zip(yaws, nwts)), (
+        "Found non-zero padding in yaw"
+    )
+
+    sequential_inputs = {
+        "xs": xs,
+        "ys": ys,
+        "wds": wds,
+        "wss": wss,
+        "TIs": TIs,
+        "target_dicts": train_target_dicts,
+    }
+    return sequential_inputs
+
+
 def main():
     """
-    Smoke-test the graph generation utilities and rotations.
+    test the graph generation utilities and rotations. possibly stale
     """
     # check test_cases_graph.generate_graphs
     graphs, layouts, inflows = test_cases_graph()

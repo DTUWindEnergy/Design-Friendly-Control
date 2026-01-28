@@ -1,17 +1,36 @@
 import warnings
+from functools import wraps
 
 import matplotlib as mpl
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-import numpy as np
 import xarray as xr
+from autograd import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.legend_handler import HandlerBase, HandlerLine2D
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, FancyArrowPatch
 from matplotlib.ticker import FuncFormatter
+
+
+def deprecated(reason=None, *, stacklevel=2):
+    def _decorator(func):
+        name = func.__qualname__
+        msg = f"{name}() is deprecated."
+        if reason:
+            msg += f" {reason}"
+
+        @wraps(func)
+        def _wrapper(*args, **kwargs):
+            warnings.warn(msg, category=FutureWarning, stacklevel=stacklevel)
+            return func(*args, **kwargs)
+
+        return _wrapper
+
+    return _decorator
+
 
 BASE_FONTSIZE = 14  # or 16, 18, tweak to taste
 
@@ -28,6 +47,7 @@ mpl.rcParams.update(
 )
 
 
+@deprecated("Use plot_ws_diff_field() instead. Supports both the fm and its diffs")
 def pretty_flowmap(
     fm,
     x,
@@ -46,6 +66,12 @@ def pretty_flowmap(
     clim=None,
     add_colorbar=True,
 ):
+    warnings.warn(
+        "old_fn() is deprecated since 0.9.0 and will be removed in 1.1.0. Use new_fn() instead.",
+        category=DeprecationWarning,
+        stacklevel=2,  # points at the caller
+    )
+    yaw_deg = yaw_deg.squeeze()
     if not isinstance(fm, (xr.DataArray, xr.Dataset)):
         raise TypeError(
             f"Expected xarray.DataArray or xarray.Dataset, got {type(fm).__name__}"
@@ -63,7 +89,8 @@ def pretty_flowmap(
         vmin, vmax = -A, A
     else:
         vmin, vmax = float(clim[0]), float(clim[1])
-    norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
+        vcenter = (vmin + vmax) / 2
+    norm = TwoSlopeNorm(vmin=vmin, vcenter=vcenter, vmax=vmax)
 
     Xg = getattr(fm, "x", np.arange(Z.shape[1]))
     Yg = getattr(fm, "y", np.arange(Z.shape[0]))
@@ -82,9 +109,6 @@ def pretty_flowmap(
         for xi, yi in zip(x, y):
             segs.append([[xi, yi - D / 2], [xi, yi + D / 2]])
     else:
-        # wd_term = 0.0 if wd_deg - 90 is None else wd_deg - 90
-        # wd_term = 0.0 if wd_deg is None else (wd_deg - 90.0)
-        # wd_term = wd_deg-90
         for xi, yi, ya in zip(x, y, yaw_deg):
             th = np.deg2rad(-ya) + np.deg2rad(wd_deg - 90)
             dx, dy = (D / 2) * np.sin(th), (D / 2) * np.cos(th)
@@ -141,12 +165,10 @@ def pretty_flowmap(
         xmin, xmax = ax.get_xlim()
         ymin, ymax = ax.get_ylim()
         span = min(xmax - xmin, ymax - ymin)  # shorter axis in data units
-        r = 0.07 * span  # ~7% of plot size; tweak factor as you like
-
+        r = 0.07 * span  # ~7% of plot size
         # place badge inside current axes (top-left), using a small margin = r
         x0 = xmin + 1.2 * r
         y0 = ymin + 1.2 * r
-
         # badge
         ax.add_patch(
             Circle(
@@ -175,7 +197,6 @@ def pretty_flowmap(
         )
         arr.set_path_effects([pe.withStroke(linewidth=lw + 1.5, foreground="white")])
         ax.add_patch(arr)
-
         # legend arrow rotated to same direction
         arrow_proxy = FancyArrowPatch((0, 0), (1, 0), fc="none", ec="black")
 
@@ -238,19 +259,14 @@ def pretty_flowmap(
     return fig, ax
 
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-
-def lut_heatmap(rose_ilk):
+def lut_heatmap(rose_jm):
     """
-    rose_ilk: array-like with columns [WD_bin (degrees, 0-359), WS_bin, yaw_0]
+    this is only dataframe-like look-up-table
+    rose_jm: table-like with columns [WD_bin (degrees, 0-359), WS_bin, yaw_0]
     """
-    rose_ilk = np.asarray(rose_ilk, dtype=float)
-
-    wd = rose_ilk[:, 0] % 360.0  # WD-major (assumed from np.arange)
-    ws = rose_ilk[:, 1]  # WS-minor (assumed from np.arange)
-    yaw = rose_ilk[:, 2]
+    wd = rose_jm[:, 0] % 360.0  # WD-major (assumed from np.arange)
+    ws = rose_jm[:, 1]  # WS-minor (assumed from np.arange)
+    yaw = rose_jm[:, 2]
 
     wd0 = wd.min()
     ws0 = ws.min()
@@ -289,6 +305,10 @@ def lut_heatmap(rose_ilk):
 
 
 def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15, ymax=16):
+    """
+    PyWake style heatmap (actually this is lk and a single turbine yaw offset (wd,ws) should be provided)
+    if in doubt, provide the wss and wds
+    """
     if wds is None or wss is None:
         wds = np.arange(0, 360, 1)
         wss = np.arange(3, 12, 1)
@@ -305,8 +325,234 @@ def lut_3d_heatmap(rose_ilk, wds=None, wss=None, vmin=-15, vmax=15, ymax=16):
     cbar.set_label("Yaw Offset($^o$)")
     ax.set_theta_zero_location("N")  # Set 0 degrees to point north
     ax.set_theta_direction(-1)  # Set clockwise direction
-    # Adjust radial label position for better readability
     ax.set_rlabel_position(135)
     plt.tight_layout()
     ax.set_ylim(0, ymax)
     plt.show()
+
+
+def plot_turbine_graph(
+    data,
+    ax=None,
+    annotate_nodes=False,
+    annotate_edges=True,
+    edge_attr_fmt="({:.2f}, {:.2f})",
+    curvature=0.18,
+    node_size=60,
+    arrow_lw=1.0,
+    arrow_alpha=0.8,
+    label_offset_frac=0.02,
+    title_from_meta=True,
+):
+    # (pos: (N,2), edge_index: (2,E), edge_attr: (E,2) optional)
+    pos = (
+        data.pos.detach().cpu().numpy()
+        if hasattr(data.pos, "detach")
+        else np.asarray(data.pos)
+    )
+    edge_index = (
+        data.edge_index.detach().cpu().numpy()
+        if hasattr(data.edge_index, "detach")
+        else np.asarray(data.edge_index)
+    )
+    edge_attr = None
+    if getattr(data, "edge_attr", None) is not None:
+        edge_attr = (
+            data.edge_attr.detach().cpu().numpy()
+            if hasattr(data.edge_attr, "detach")
+            else np.asarray(data.edge_attr)
+        )
+
+    n_nodes = pos.shape[0]
+    # spans for scaling label offsets
+    xspan = float(np.nanmax(pos[:, 0]) - np.nanmin(pos[:, 0]))
+    yspan = float(np.nanmax(pos[:, 1]) - np.nanmin(pos[:, 1]))
+    span = max(xspan, yspan, 1e-12)
+    label_offset = label_offset_frac * span
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7, 7))
+    else:
+        fig = ax.figure
+
+    # nodes
+    ax.scatter(pos[:, 0], pos[:, 1], s=node_size)
+    if annotate_nodes:
+        for i in range(n_nodes):
+            ax.text(pos[i, 0], pos[i, 1], f"{i}", fontsize=9, ha="left", va="bottom")
+
+    # edges (directed arrows)
+    src = edge_index[0, :]
+    dst = edge_index[1, :]
+
+    for k, (i, j) in enumerate(zip(src, dst)):
+        p0 = pos[i]
+        p1 = pos[j]
+
+        rad = (
+            curvature if i < j else -curvature
+        )  # separates bidirectional pairs visually
+        arrow = FancyArrowPatch(
+            p0,
+            p1,
+            arrowstyle="-|>",
+            mutation_scale=10,
+            linewidth=arrow_lw,
+            alpha=arrow_alpha,
+            connectionstyle=f"arc3,rad={rad}",
+        )
+        ax.add_patch(arrow)
+
+        if annotate_edges and (edge_attr is not None):
+            v = p1 - p0
+            nv = np.linalg.norm(v)
+            if nv > 0:
+                n = np.array([-v[1], v[0]]) / nv  # unit normal (perpendicular)
+            else:
+                n = np.array([0.0, 0.0])
+
+            mid = 0.5 * (p0 + p1)
+            # push label off the line; sign follows curvature to reduce overlap
+            mid_lbl = mid + np.sign(rad) * label_offset * n
+
+            a0, a1 = edge_attr[k, 0], edge_attr[k, 1]
+            ax.text(
+                mid_lbl[0],
+                mid_lbl[1],
+                edge_attr_fmt.format(a0, a1),
+                fontsize=8,
+                ha="center",
+                va="center",
+            )
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.grid(True, linewidth=0.5, alpha=0.3)
+
+    if title_from_meta and hasattr(data, "meta") and isinstance(data.meta, dict):
+        wd = data.meta.get("wd_deg", None)
+        ws = data.meta.get("ws", None)
+        ti = data.meta.get("ti", None)
+        conn = data.meta.get("connectivity", None)
+        method = data.meta.get("yaws_method", None)
+        parts = []
+        if conn is not None:
+            parts.append(str(conn))
+        if method is not None:
+            parts.append(str(method))
+        if (wd is not None) and (ws is not None) and (ti is not None):
+            parts.append(f"wd={wd:.1f}°, ws={ws:.2f} m/s, TI={ti:.3f}")
+        if parts:
+            ax.set_title(" | ".join(parts))
+
+    return fig, ax
+
+
+def plot_ws_diff_field(
+    ws_eff_fm,
+    X_fix=None,
+    Y_fix=None,
+    yaw_deg=None,
+    *,
+    ax=None,
+    D=284.0,
+    bar_length_m=None,
+    levels=121,
+    cmap="Blues_r",
+    cbar_label=r"Wind speed (m/s)",  # $\Delta$
+    tick_step_D=5,
+    yaw_text_offset_m=(200.0, 150.0),
+    figsize=(10, 10),
+    save_path=None,
+    dpi=300,
+    show=True,
+    # sizing controls
+    label_size=15,
+    tick_label_size=13,
+    cbar_label_size=15,
+    cbar_tick_label_size=13,
+    yaw_text_size=14,
+    lw_axes=0.8,
+    lw_rotor=2.0,
+    scatter_s=15,
+    use_normslop=False,
+):
+    """Should work well with PyWake flow"""
+    bar_length_m = D if bar_length_m is None else bar_length_m
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+    field = ws_eff_fm.squeeze()
+    x = field["x"].to_numpy()
+    y = field["y"].to_numpy()
+    z = field["WS_eff"].to_numpy()  # fixes `.values()` / ValuesView issues
+    cf = dict(extend="both", cmap=cmap)
+
+    if use_normslop:
+        max_abs = np.nanmax(np.abs(z))
+        cf["levels"] = np.linspace(-max_abs, max_abs, int(levels))
+        cf["norm"] = TwoSlopeNorm(vmin=-max_abs, vcenter=0.0, vmax=max_abs)
+    else:
+        cf["levels"] = int(levels)
+
+    cs = ax.contourf(x, y, z, **cf)
+
+    cbar = fig.colorbar(cs, ax=ax, pad=0.01)
+    cbar.set_label(cbar_label, fontsize=cbar_label_size)
+    cbar.ax.tick_params(labelsize=cbar_tick_label_size)
+    cbar.ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f"))
+
+    if (X_fix is not None) and (Y_fix is not None) and (yaw_deg is not None):
+        segs = []
+        for xi, yi, g in zip(X_fix, Y_fix, yaw_deg):
+            th = np.deg2rad(g)
+            dx = (bar_length_m / 2.0) * np.sin(th)
+            dy = (bar_length_m / 2.0) * np.cos(th)
+            segs.append([[xi - dx, yi - dy], [xi + dx, yi + dy]])
+
+        ax.add_collection(
+            LineCollection(
+                segs,
+                colors="black",
+                linewidths=lw_rotor,
+                capstyle="round",
+                zorder=4,
+            )
+        )
+        ax.scatter(X_fix, Y_fix, s=scatter_s, c="k", zorder=5)
+
+        ox, oy = yaw_text_offset_m
+        pe_outline = [pe.withStroke(linewidth=3, foreground="white")]
+        for xi, yi, g in zip(X_fix, Y_fix, yaw_deg):
+            ax.text(
+                xi + ox,
+                yi + oy,
+                f"{int(np.round(g, 0)):.0f}" + r"$^\circ$",
+                ha="center",
+                va="bottom",
+                zorder=10,
+                fontsize=yaw_text_size,
+                path_effects=pe_outline,
+            )
+
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(tick_step_D * D))
+    ax.yaxis.set_major_locator(mticker.MultipleLocator(tick_step_D * D))
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v / D:.0f}D"))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v / D:.0f}D"))
+
+    ax.set_aspect("equal", "box")
+    ax.set_xlabel("X (D)", fontsize=label_size)
+    ax.set_ylabel("Y (D)", fontsize=label_size)
+    ax.tick_params(axis="both", labelsize=tick_label_size, direction="out")
+    for sp in ax.spines.values():
+        sp.set_linewidth(lw_axes)
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
+    if show:
+        plt.show()
+
+    return fig, ax, cbar

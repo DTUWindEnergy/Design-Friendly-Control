@@ -1,10 +1,9 @@
-from itertools import product
-
-import numpy as np
 from design_friendly.models import models_filepath
-from design_friendly.utils.misc import log_execution_time
-from design_friendly.utils.pred import predict
-from design_friendly.utils.to_graph import graph_maker_lut, graph_maker_time
+from py_wake import numpy as np
+
+from .misc import log_execution_time
+from .pred import predict_torchscript, torchscript_to_lut
+from .to_graph import graph_maker_lut, graph_maker_time
 
 
 @log_execution_time
@@ -14,10 +13,11 @@ def easy_yaw_gnn(
     wd,
     ws,
     TI,
-    model_path=models_filepath + "best.pt",
+    model_path=models_filepath + "best.ptnox.torchscript.pt",
     num_threads=0,
-    batch_size=256,
+    batch_size=512,
     time=False,
+    output_yaw_idx=-1,  # multivariate preds
 ):
     n_wt = len(x)
     if not time:
@@ -28,16 +28,18 @@ def easy_yaw_gnn(
             wss=ws,
             TI=TI,
             num_threads=num_threads,
+            connectivity="wake_aware",
         )
-        results = predict(
-            model_path=model_path,
-            graphfarms=graphs,
-            batch_size=batch_size,  # int(len(wd) * len(ws)),
-            reshape=(n_wt, len(wd), len(ws)),
-        )
+        results = predict_torchscript(
+            model_path,
+            graphs,
+            batch_size,
+            "array",
+        )  # wt, wd, ws, out
+        results = torchscript_to_lut(results, wd, ws)
+        results = results[:, :, :, output_yaw_idx]
     elif time:
-        n_t = len(wd)
-        assert n_t == len(ws), "provide time series"
+        assert len(wd) == len(ws), "provide time series"
         graphs = graph_maker_time(
             x=x,
             y=y,
@@ -45,13 +47,16 @@ def easy_yaw_gnn(
             ws_t=ws,
             TI_t=TI,
             num_threads=num_threads,
+            connectivity="wake_aware",
         )
-        results = predict(
-            model_path=model_path,
-            graphfarms=graphs,
-            batch_size=batch_size,
-            reshape=(n_wt, n_t),
-        )
+        results = predict_torchscript(
+            model_path,
+            graphs,
+            batch_size,
+            "array",
+        )  # ts, wt, out
+        results = results[:, :, -1]
+        results = results.T  # wt, ts
     return results
 
 

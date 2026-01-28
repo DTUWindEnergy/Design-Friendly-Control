@@ -1,13 +1,12 @@
+from py_wake import numpy as np
 from py_wake.deficit_models.gaussian import ZongGaussianDeficit
-from py_wake.superposition_models import WeightedSum, SqrMaxSum, LinearSum
-from py_wake.rotor_avg_models import GaussianOverlapAvgModel, CGIRotorAvg
-from py_wake.wind_farm_models import PropagateDownwind
-from py_wake.turbulence_models import CrespoHernandez
-from py_wake.deflection_models.jimenez import JimenezWakeDeflection
-from py_wake.site._site import UniformSite
 from py_wake.deficit_models.utils import ct2a_mom1d
-import numpy as np
-import warnings
+from py_wake.deflection_models.jimenez import JimenezWakeDeflection
+from py_wake.rotor_avg_models import CGIRotorAvg, GaussianOverlapAvgModel
+from py_wake.site._site import UniformSite
+from py_wake.superposition_models import LinearSum, SqrMaxSum, WeightedSum
+from py_wake.turbulence_models import CrespoHernandez
+from py_wake.wind_farm_models import PropagateDownwind
 
 
 def get_flowmodel(wt=None, site=None):
@@ -15,7 +14,8 @@ def get_flowmodel(wt=None, site=None):
         site = UniformSite()  # placeholder
     if wt is None:
         # add the project root to sys.path (for IEA22s)
-        import os, sys
+        import os
+        import sys
 
         project_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         sys.path.insert(0, project_folder)

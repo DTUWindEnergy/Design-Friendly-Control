@@ -1,4 +1,4 @@
-import numpy as np
+from py_wake import numpy as np
 
 
 def scale_by_D(D_origin, x_origin, y_origin, D_new):
@@ -70,6 +70,7 @@ def geometric_median(x, y):
 
 
 def hkn(scale_D=None, subset=True):  # wip
+    raise NotImplementedError("HKN site is work in progress.")
     from py_wake.site import UniformSite
     from py_wake.examples.data.dtu10mw import DTU10MW
     from py_wake.site import UniformWeibullSite
