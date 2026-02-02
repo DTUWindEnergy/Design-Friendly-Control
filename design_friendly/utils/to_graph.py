@@ -1,24 +1,22 @@
 import logging
-import math
 import os
 import warnings
 from itertools import product
-from py_wake import numpy as np
+
 import torch
 from design_friendly.utils.misc import log_execution_time
 from joblib import Parallel, delayed
+from py_wake import numpy as np
 from torch_geometric.data import Data, Dataset
 from torch_geometric.transforms import (
     Cartesian,
     Delaunay,
     FaceToEdge,
-    KNNGraph,
     LocalCartesian,
     Polar,
 )
 from torch_geometric.utils import dense_to_sparse
-from tqdm import tqdm
-from tqdm_joblib import tqdm_joblib
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # DEBUG
@@ -26,11 +24,7 @@ logger.setLevel(logging.INFO)  # DEBUG
 
 def geometric_median(x, y):
     """
-    Do we even need this? transfroms.Cartesian is relative anyways.
-    """
-
-    """
-    Memory intensive way to calculate geometric median (central turbine) based
+    (Memory intensive way) to calculate geometric median (central turbine) based
     inter-distances between all the turbines in the wind farm
 
     Parameters
@@ -43,7 +37,6 @@ def geometric_median(x, y):
     center : ndarray, shape (2,)
         Coordinates of the central point (argmin distance to all points).
     """
-
     P = np.column_stack([x, y])  # (n,2)
     D = np.linalg.norm(P[:, None, :] - P[None, :, :], axis=-1)  # (n,n)
     idx = np.argmin(D.sum(axis=1))  # index of central turbine (medoid)
@@ -69,7 +62,7 @@ def rotate_to_west_centered(points, wd_deg):
     """
     pts = np.asarray(points, float)
     if pts.ndim != 2 or pts.shape[1] != 2:
-        raise ValueError("points must have shape (n_wt, 2)")
+        raise ValueError("points must have shape (n_wt, 2), got", pts.shape)
 
     wd = float(wd_deg)
     # center = np.median(pts, axis=0)  # (2,)
@@ -83,7 +76,7 @@ def rotate_to_west_centered(points, wd_deg):
 
 def unrotate_from_west_centered(rot_pts, wd_deg, center):
     """
-    Restore coordinates before the west-centering rotation.e
+    Restore coordinates before the west-centering rotation.
 
     Parameters
     ----------
@@ -112,7 +105,7 @@ def gen_graph_edges(
     add_edge="cartesian",
     wd=270,
     rotor_diameter=284,
-    k_wake=0.16,  # 0.10,
+    k_wake=0.40,
     conn_distxmaxD=None,
     conn_topk=None,
 ):
@@ -124,7 +117,7 @@ def gen_graph_edges(
     points : ndarray, shape (n_wt, 2)
         Turbine layout coordinates.
     connectivity : str
-        Connectivity type ('delaunay', 'knn', 'wake_aware', or 'fully_connected').
+        Connectivity type ('delaunay', 'wake_aware', or 'fully_connected').
     add_edge : str, default 'cartesian'
         Edge feature type to attach ('polar', 'cartesian', or 'local cartesian').
     wd : float, default 270
@@ -137,7 +130,6 @@ def gen_graph_edges(
     """
     assert connectivity in [
         "delaunay",
-        "knn",
         "fully_connected",
         "wake_aware",
     ]
@@ -150,10 +142,6 @@ def gen_graph_edges(
         d = Delaunay()
         e = FaceToEdge()
         g = e(d(x))
-    elif connectivity.casefold() == "knn":
-        kv = math.ceil(np.sqrt(len(points)))
-        knn = KNNGraph(k=kv)
-        g = knn(x)
     elif connectivity.casefold() == "fully_connected":
         adj = torch.ones(t.shape[0], t.shape[0])
         g = Data(pos=t, edge_index=dense_to_sparse(adj.fill_diagonal_(0))[0])
@@ -166,7 +154,6 @@ def gen_graph_edges(
         # Should be able to use Cartesian(norm=False) but not sure how it implements
         dx = x[None, :] - x[:, None]  # (n, n)
         dy = y[None, :] - y[:, None]  # (n, n)
-        rotor_diameter = float(rotor_diameter)
         R = 0.5 * rotor_diameter
         r_wake = R + float(k_wake) * dx  # (n, n)
         # Interaction mask: j is downstream of i and within wake radius
@@ -176,7 +163,7 @@ def gen_graph_edges(
             mask = mask & (dx <= dx_max)
         mask.fill_diagonal_(False)
         # directionless, connect i-j if i wakes j OR j wakes i
-        if conn_topk is None:
+        if conn_topk is None:  # induces discontinuity
             src, dst = mask.nonzero(as_tuple=True)  # directed i->j
         else:
             # Keep only top-K upstream "closest" per downstream turbine
@@ -273,7 +260,6 @@ def process_one_layout(
     if target_dict is None:
         target_dict = {"yaw": np.repeat(np.nan, n_wt)}
     elif isinstance(target_dict, dict):
-        # if np.any([np.isnan(v) for k, v in target_dict.items()]):
         if any(np.isnan(v).any() for v in target_dict.values()):
             bad_keys = [k for k, v in target_dict.items() if np.isnan(v).any()]
             if bad_keys:
@@ -292,6 +278,7 @@ def process_one_layout(
     )
 
     if per_turbine_dict is True:
+        warnings.warn("Not tested. Very slow but might help with load predictions.")
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s
 
@@ -405,37 +392,32 @@ def generate_graphs(
     GraphFarmsDataset
         GraphFarmsDataset containing graphs for every case.
     """
-    assert len(layouts) == len(inflows)
+    assert len(layouts) == len(inflows), (
+        f"layouts {len(layouts)} and inflows {len(inflows)}"
+    )
     n_cases = len(layouts)
     if isinstance(per_turbines, (bool, np.bool_)):
         per_turbines = [bool(per_turbines)] * n_cases
     if target_dicts is None:
         target_dicts = [None] * n_cases
-    # if all layouts are the same and per_turbines_dict is not populated (list of Nones or something); run pywake vectorized for inflows (unless per_turbines False)
 
     iter_cases = list(zip(layouts, inflows, per_turbines, target_dicts))
     if (num_threads == -1) or (num_threads > 1) or (num_threads is None):
-        with tqdm_joblib(tqdm(desc="Converting to graphs", total=len(iter_cases))):
-            graphs = Parallel(n_jobs=-1)(  # TODO: fix this.
-                delayed(process_one_layout)(
-                    layout=layout,
-                    inflow=inflow,
-                    per_turbine_dict=per_turbine,
-                    target_dict=target_dict,  # None defaults to yaw
-                    layout_id=str(i).zfill(7),
-                    connectivity=connectivity,
-                    source_datainfo=source_datainfo,
-                )
-                for i, (layout, inflow, per_turbine, target_dict) in enumerate(
-                    iter_cases
-                )
+        graphs = Parallel(n_jobs=num_threads)(
+            delayed(process_one_layout)(
+                layout=layout,
+                inflow=inflow,
+                per_turbine_dict=per_turbine,
+                target_dict=target_dict,  # None defaults to yaw
+                layout_id=str(i).zfill(7),
+                connectivity=connectivity,
+                source_datainfo=source_datainfo,
             )
+            for i, (layout, inflow, per_turbine, target_dict) in enumerate(iter_cases)
+        )
     else:
-        graphs = []
-        for i, (layout, inflow, per_turbine, target_dict) in tqdm(
-            enumerate(iter_cases), total=len(iter_cases), desc="Converting to graphs"
-        ):
-            g = process_one_layout(
+        graphs = [
+            process_one_layout(
                 layout=layout,
                 inflow=inflow,
                 per_turbine_dict=per_turbine,
@@ -444,7 +426,9 @@ def generate_graphs(
                 connectivity=connectivity,
                 source_datainfo=source_datainfo,
             )
-            graphs.append(g)
+            for i, (layout, inflow, per_turbine, target_dict) in enumerate(iter_cases)
+        ]
+
     logger.info(f"generated {len(graphs)} graphs from {n_cases} cases")
     if save_pt_path:
         torch.save(graphs, save_pt_path)
@@ -465,7 +449,6 @@ class GraphFarmsDataset(Dataset):
     def __init__(self, source):
         super().__init__()
         entries = None
-
         if isinstance(source, (str, os.PathLike)) and str(source).endswith(".pt"):
             # Path to .pt? not tested
             loaded = torch.load(source, map_location="cpu")
@@ -800,76 +783,6 @@ def graph_maker_lut(
 
 
 @log_execution_time
-def test_cases_graph(wd_=270, num_threads=0, connectivity="wake_aware"):
-    """
-    Create a small set of random layouts for smoke testing.
-
-    Parameters
-    ----------
-    wd_ : float, default 270
-        Wind direction applied to every generated case.
-
-    Returns
-    -------
-    tuple
-        (GraphSet, layouts, inflows) for the test cases.
-    """
-
-    def make_case(n_wt, ws, ti, wd, rd=248.0, spacing_D=4.0):
-        spacing = rd * spacing_D
-        n1 = (n_wt + 1) // 2  # row 1 count
-        n2 = n_wt - n1  # row 2 count
-
-        noise_1 = np.random.uniform(-rd / 2, rd / 2, size=n1)
-        noise_2 = np.random.uniform(-rd / 2, rd / 2, size=n2)
-        X1 = noise_1 + np.arange(n1, dtype=float) * spacing
-        X2 = noise_2 + np.arange(n2, dtype=float) * spacing
-
-        Y1 = noise_1
-        Y2 = noise_2 + 3 * rd
-
-        coords = np.column_stack([np.concatenate([X1, X2]), np.concatenate([Y1, Y2])])
-
-        layout = {"coords": coords, "form": "test"}
-        inflow = {"WS": float(ws), "TI": float(ti), "WD": float(wd)}
-        target_dict = {"yaw": np.repeat(np.nan, n_wt)}
-        return layout, inflow, target_dict
-
-    ws_, ti_ = np.array(6.0), np.array(0.05)
-
-    # build some cases
-    n_wts = [5, 10, 19, 13]
-    n_cases = len(n_wts)
-    cases = [make_case(n, ws_, ti_, wd_) for n in n_wts]
-    layouts, inflows, target_dicts = map(list, zip(*cases))
-
-    graphs = generate_graphs(
-        layouts=layouts,
-        inflows=inflows,
-        num_threads=num_threads,
-        target_dicts=target_dicts,
-        per_turbines=True,  # y shape (5, n_wt)
-        connectivity=connectivity,
-        source_datainfo="robust_slsqp",
-        save_pt_path=None,
-    )
-
-    # assertions
-    assert len(graphs) == n_cases
-    for g, n_wt in zip(graphs, n_wts):
-        assert isinstance(g.name, str)
-        assert isinstance(g, Data)
-        assert g.pos.shape[0] == n_wt
-        assert g.globals.shape == (1, 2)
-        assert g.edge_index.shape[0] == 2
-        assert g.edge_index.shape[1] > 0
-        # assert not torch.isnan(g.y).any()  # assigned nan internally
-        assert not torch.isnan(g.globals).any()
-
-    return graphs, layouts, inflows
-
-
-@log_execution_time
 def seq_graph_inputs(ds, _slice):
     """
     convert ~PyWake xarray ds to graph structure
@@ -878,28 +791,22 @@ def seq_graph_inputs(ds, _slice):
     # edge inputs (per turbine; shape: (n_case, n_wt_max))
     xs = ds_sel.rob_x.values
     ys = ds_sel.rob_y.values
-
     # misc
     nwts = ds_sel.n_wt.values.astype(int)  # (n_case,)
-
     # globals (per case; shape: (n_case,))
     wds = ds_sel.rob_WD.values
     wss = ds_sel.rob_WS.values
     TIs = ds_sel.rob_TI.values
-
     # targets (per turbine; shape: (n_case, n_wt_max))
     WS_effs = ds_sel.rob_WS_eff.values
     TI_effs = ds_sel.rob_TI_eff.values
     yaws = np.round(ds_sel.rob_yaw.values, 4)
-
     # broadcast globals to per-turbine (shape: (n_case, 1))
     wss_b = wss[:, None]
     TIs_b = TIs[:, None]
-
     # deficit targets (shape: (n_case, n_wt_max))
     WS_def = wss_b - WS_effs
     TI_def = TIs_b - TI_effs
-
     # framework format (variable-length per case)
     train_target_dicts = [
         {
@@ -909,7 +816,6 @@ def seq_graph_inputs(ds, _slice):
         }
         for WS_row_def, TI_row_def, yaw_row, n_wt in zip(WS_def, TI_def, yaws, nwts)
     ]
-
     # assert removing only zeros (padding)
     assert all(np.isnan(row[n_wt:]).all() for row, n_wt in zip(yaws, nwts)), (
         "Found non-zero padding in yaw"
@@ -924,88 +830,3 @@ def seq_graph_inputs(ds, _slice):
         "target_dicts": train_target_dicts,
     }
     return sequential_inputs
-
-
-def main():
-    """
-    test the graph generation utilities and rotations. possibly stale
-    """
-    # check test_cases_graph.generate_graphs
-    graphs, layouts, inflows = test_cases_graph()
-    for g in graphs:
-        print(f"Graph {g.name}:")
-        print(g)
-        print("meta:", g.meta)
-    # check rotated graphs
-    wd_ = 188.0
-    graphs, layouts, inflows = test_cases_graph(wd_=wd_)
-    for g, layout, inflow in zip(graphs, layouts, inflows):
-        assert np.allclose(
-            unrotate_from_west_centered(
-                g.pos,
-                wd_deg=wd_,
-                center=(g.meta["farm_center_x"], g.meta["farm_center_y"]),
-            ),
-            layout["coords"],
-            atol=1e-3,
-        ), "g.pos dont match graph to layout"
-        assert np.allclose(g.globals[0], inflow["WS"]), "g.globals no match to inflow"
-
-    # check graph_maker_sequential
-    # match test_cases_graph first and compare
-    graphs, layouts, inflows = test_cases_graph(wd_=wd_)
-    wd_ = inflows[0]["WD"]
-    xs = [l["coords"][:, 0] for l in layouts]
-    ys = [l["coords"][:, 1] for l in layouts]
-    n_layouts = len(xs)
-    graphs = graph_maker_sequential(
-        xs=xs,
-        ys=ys,
-        wds=[wd_] * n_layouts,
-        wss=[inflows[0]["WS"]] * n_layouts,
-        TIs=[inflows[0]["TI"]] * n_layouts,
-    )
-    for g, layout, inflow in zip(graphs, layouts, inflows):
-        assert np.allclose(
-            unrotate_from_west_centered(
-                g.pos,
-                wd_deg=wd_,
-                center=(g.meta["farm_center_x"], g.meta["farm_center_y"]),
-            ),
-            layout["coords"],
-            atol=1e-3,
-        ), "g.pos dont match graph to layout"
-        assert np.allclose(g.globals[0], inflow["WS"]), "g.globals no match to inflow"
-
-    # check graph_maker_lut
-    wds = np.arange(0, 360, 3)
-    wss = np.arange(3, 25, 1)
-    ti = inflows[0]["TI"]
-    graphs = graph_maker_lut(
-        x=xs[0],
-        y=ys[0],
-        wds=wds,
-        wss=wss,
-        TI=ti,
-    )
-    inflows = [
-        {"WS": float(ws), "TI": float(ti), "WD": float(wd)}
-        for wd, ws in product(wds, wss)
-    ]
-    layout_ = np.column_stack((xs[0], ys[0]))
-
-    for g, inflow in zip(graphs, inflows):
-        assert np.allclose(
-            unrotate_from_west_centered(
-                g.pos,
-                wd_deg=inflow["WD"],
-                center=(g.meta["farm_center_x"], g.meta["farm_center_y"]),
-            ),
-            layout_,
-            atol=1e-3,
-        ), "g.pos dont match graph to layout"
-        assert np.allclose(g.globals[0], inflow["WS"]), "g.globals no match to inflow"
-
-
-if __name__ == "__main__":
-    main()

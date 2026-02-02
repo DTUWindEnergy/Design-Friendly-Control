@@ -1,9 +1,8 @@
 from design_friendly.models import models_filepath
-from py_wake import numpy as np
 
 from .misc import log_execution_time
 from .pred import predict_torchscript, torchscript_to_lut
-from .to_graph import graph_maker_lut, graph_maker_time
+from .to_graph import graph_maker_lut, graph_maker_sequential, graph_maker_time
 
 
 @log_execution_time
@@ -18,9 +17,27 @@ def easy_yaw_gnn(
     batch_size=512,
     time=False,
     output_yaw_idx=-1,  # multivariate preds
+    sequential=False,
 ):
-    n_wt = len(x)
-    if not time:
+    if sequential:
+        assert time is False, "sequential only for steady state"
+        assert len(wd) == len(ws) == len(TI)
+        graphs = graph_maker_sequential(
+            xs=x,
+            ys=y,
+            wds=wd,
+            wss=ws,
+            TIs=TI,
+            connectivity="wake_aware",
+        )
+        results = predict_torchscript(
+            model_path,
+            graphs,
+            batch_size,
+            "array",
+        )  # wt, ts, out
+        results = results[:, :, output_yaw_idx]
+    elif not time:
         graphs = graph_maker_lut(
             x=x,
             y=y,
@@ -55,16 +72,8 @@ def easy_yaw_gnn(
             batch_size,
             "array",
         )  # ts, wt, out
-        results = results[:, :, -1]
+        results = results[:, :, output_yaw_idx]
         results = results.T  # wt, ts
+    else:
+        raise ValueError("invalid combination of time, sequential or lut")
     return results
-
-
-def main():
-    from design_friendly.utils.sites import Hornsrev1Site
-
-    wds = np.arange(0, 360, 2)
-    wss = np.arange(3, 25, 1)
-    TI = 0.06
-    (x, y), _, _ = Hornsrev1Site()
-    yaws = easy_yaw_gnn(x, y, wd=wds, ws=wss, TI=TI)

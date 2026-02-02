@@ -196,23 +196,3 @@ class GEN22(GenericWindTurbine):
             ct_idle=0,
             constant_ct=iea22.ct(ws=5),
         )
-
-
-def main():
-    wt = IEA22s()
-    print("Diameter", wt.diameter())
-    print("Hub height", wt.hub_height())
-    ws = np.arange(0, 25)
-    import matplotlib.pyplot as plt
-
-    plt.plot(ws, wt.power(ws), ".-", label="power [W]")
-    c = plt.plot([], label="ct")[0].get_color()
-    plt.legend()
-    ax = plt.twinx()
-    ax.plot(ws, wt.ct(ws), ".-", color=c)
-    plt.show()
-    wt.plot_power_ct()
-
-
-if __name__ == "__main__":
-    main()

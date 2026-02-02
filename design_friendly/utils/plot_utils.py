@@ -1,7 +1,6 @@
 import warnings
 from functools import wraps
 
-import matplotlib as mpl
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
@@ -32,21 +31,6 @@ def deprecated(reason=None, *, stacklevel=2):
     return _decorator
 
 
-BASE_FONTSIZE = 14  # or 16, 18, tweak to taste
-
-mpl.rcParams.update(
-    {
-        "font.size": BASE_FONTSIZE,  # default text
-        "axes.titlesize": BASE_FONTSIZE * 1.2,  # axes titles
-        "axes.labelsize": BASE_FONTSIZE,  # x/y labels
-        "xtick.labelsize": BASE_FONTSIZE * 0.9,
-        "ytick.labelsize": BASE_FONTSIZE * 0.9,
-        "legend.fontsize": BASE_FONTSIZE * 0.9,
-        "figure.titlesize": BASE_FONTSIZE * 1.3,
-    }
-)
-
-
 @deprecated("Use plot_ws_diff_field() instead. Supports both the fm and its diffs")
 def pretty_flowmap(
     fm,
@@ -66,11 +50,6 @@ def pretty_flowmap(
     clim=None,
     add_colorbar=True,
 ):
-    warnings.warn(
-        "old_fn() is deprecated since 0.9.0 and will be removed in 1.1.0. Use new_fn() instead.",
-        category=DeprecationWarning,
-        stacklevel=2,  # points at the caller
-    )
     yaw_deg = yaw_deg.squeeze()
     if not isinstance(fm, (xr.DataArray, xr.Dataset)):
         raise TypeError(
@@ -91,14 +70,12 @@ def pretty_flowmap(
         vmin, vmax = float(clim[0]), float(clim[1])
         vcenter = (vmin + vmax) / 2
     norm = TwoSlopeNorm(vmin=vmin, vcenter=vcenter, vmax=vmax)
-
     Xg = getattr(fm, "x", np.arange(Z.shape[1]))
     Yg = getattr(fm, "y", np.arange(Z.shape[0]))
     cs = ax.contourf(
         Xg, Yg, Z, levels=np.linspace(vmin, vmax, levels), cmap=cmap, norm=norm
     )
     ax.scatter(x, y, c="k", s=D / 50)
-
     if add_colorbar:
         cbar = fig.colorbar(cs, ax=ax, pad=0.005, shrink=0.5, aspect=20)
         cbar.set_label(r"$\Delta$ Wind speed [m/s]")
@@ -131,7 +108,6 @@ def pretty_flowmap(
             return [ln]
 
     turb_proxy = Line2D([0], [0], color="black", linewidth=2.0)
-
     # Per-turbine labels
     if pts:
         pe_outline = [pe.withStroke(linewidth=2, foreground="white")]
@@ -156,7 +132,6 @@ def pretty_flowmap(
                         zorder=10,
                         path_effects=pe_outline,
                     )
-
     # Wind arrow with circle badge
     arrow_proxy = None
     if wd_deg is not None:
@@ -175,7 +150,6 @@ def pretty_flowmap(
                 (x0, y0), radius=r, fc="white", ec="0.6", lw=1.0, alpha=0.95, zorder=18
             )
         )
-
         # main arrow (outside badge)
         x1, y1 = x0 + r * np.cos(theta), y0 + r * np.sin(theta)
         p0, p1 = ax.transData.transform((x0, y0)), ax.transData.transform((x1, y1))
@@ -223,7 +197,6 @@ def pretty_flowmap(
                 )
                 return [patch]
 
-    # legend with pointy wind direction
     handles, labels, hmap = (
         [turb_proxy],
         ["Turbines"],
@@ -275,8 +248,6 @@ def lut_heatmap(rose_jm):
 
     n_wd = int(round((wd.max() - wd0) / wd_step)) + 1
     n_ws = int(round((ws.max() - ws0) / ws_step)) + 1
-
-    wds = wd0 + wd_step * np.arange(n_wd)
     wss = ws0 + ws_step * np.arange(n_ws)
     wd_idx = ((wd - wd0) / wd_step).astype(int)
     ws_idx = ((ws - ws0) / ws_step).astype(int)
@@ -336,7 +307,7 @@ def plot_turbine_graph(
     ax=None,
     annotate_nodes=False,
     annotate_edges=True,
-    edge_attr_fmt="({:.2f}, {:.2f})",
+    edge_attr_fmt="({:.0f})",
     curvature=0.18,
     node_size=60,
     arrow_lw=1.0,
@@ -344,82 +315,55 @@ def plot_turbine_graph(
     label_offset_frac=0.02,
     title_from_meta=True,
 ):
-    # (pos: (N,2), edge_index: (2,E), edge_attr: (E,2) optional)
-    pos = (
-        data.pos.detach().cpu().numpy()
-        if hasattr(data.pos, "detach")
-        else np.asarray(data.pos)
-    )
-    edge_index = (
-        data.edge_index.detach().cpu().numpy()
-        if hasattr(data.edge_index, "detach")
-        else np.asarray(data.edge_index)
-    )
-    edge_attr = None
-    if getattr(data, "edge_attr", None) is not None:
-        edge_attr = (
-            data.edge_attr.detach().cpu().numpy()
-            if hasattr(data.edge_attr, "detach")
-            else np.asarray(data.edge_attr)
-        )
+    """Plot a directed turbine graph.
 
-    n_nodes = pos.shape[0]
-    # spans for scaling label offsets
-    xspan = float(np.nanmax(pos[:, 0]) - np.nanmin(pos[:, 0]))
-    yspan = float(np.nanmax(pos[:, 1]) - np.nanmin(pos[:, 1]))
-    span = max(xspan, yspan, 1e-12)
-    label_offset = label_offset_frac * span
-
+    Parameters
+    ----------
+    data : object
+        pos : (N, 2)
+        edge_index : (2, E)
+        edge_attr : (E, F) required if annotate_edges=True
+        meta : dict required if title_from_meta=True
+    """
+    pos = data.pos  # (N, 2)
+    edge_index = data.edge_index  # (2, E)
+    edge_attr = data.edge_attr if annotate_edges else None  # (E, F)
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 7))
     else:
         fig = ax.figure
-
-    # nodes
     ax.scatter(pos[:, 0], pos[:, 1], s=node_size)
     if annotate_nodes:
-        for i in range(n_nodes):
+        for i in range(pos.shape[0]):
             ax.text(pos[i, 0], pos[i, 1], f"{i}", fontsize=9, ha="left", va="bottom")
-
-    # edges (directed arrows)
     src = edge_index[0, :]
     dst = edge_index[1, :]
-
     for k, (i, j) in enumerate(zip(src, dst)):
         p0 = pos[i]
         p1 = pos[j]
-
-        rad = (
-            curvature if i < j else -curvature
-        )  # separates bidirectional pairs visually
-        arrow = FancyArrowPatch(
-            p0,
-            p1,
-            arrowstyle="-|>",
-            mutation_scale=10,
-            linewidth=arrow_lw,
-            alpha=arrow_alpha,
-            connectionstyle=f"arc3,rad={rad}",
+        rad = curvature if i < j else -curvature
+        ax.add_patch(
+            FancyArrowPatch(
+                p0,
+                p1,
+                arrowstyle="-|>",
+                mutation_scale=10,
+                linewidth=arrow_lw,
+                alpha=arrow_alpha,
+                connectionstyle=f"arc3,rad={rad}",
+            )
         )
-        ax.add_patch(arrow)
-
-        if annotate_edges and (edge_attr is not None):
-            v = p1 - p0
-            nv = np.linalg.norm(v)
-            if nv > 0:
-                n = np.array([-v[1], v[0]]) / nv  # unit normal (perpendicular)
-            else:
-                n = np.array([0.0, 0.0])
-
+        if annotate_edges:
             mid = 0.5 * (p0 + p1)
-            # push label off the line; sign follows curvature to reduce overlap
-            mid_lbl = mid + np.sign(rad) * label_offset * n
-
-            a0, a1 = edge_attr[k, 0], edge_attr[k, 1]
+            d = p1 - p0
+            L = float(np.hypot(d[0], d[1]))
+            if L > 0.0:
+                n = np.array([-d[1], d[0]]) / L
+                mid = mid + np.sign(rad) * (label_offset_frac * L) * n
             ax.text(
-                mid_lbl[0],
-                mid_lbl[1],
-                edge_attr_fmt.format(a0, a1),
+                mid[0],
+                mid[1],
+                edge_attr_fmt.format(edge_attr[k, 0]),
                 fontsize=8,
                 ha="center",
                 va="center",
@@ -429,23 +373,8 @@ def plot_turbine_graph(
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.grid(True, linewidth=0.5, alpha=0.3)
-
-    if title_from_meta and hasattr(data, "meta") and isinstance(data.meta, dict):
-        wd = data.meta.get("wd_deg", None)
-        ws = data.meta.get("ws", None)
-        ti = data.meta.get("ti", None)
-        conn = data.meta.get("connectivity", None)
-        method = data.meta.get("yaws_method", None)
-        parts = []
-        if conn is not None:
-            parts.append(str(conn))
-        if method is not None:
-            parts.append(str(method))
-        if (wd is not None) and (ws is not None) and (ti is not None):
-            parts.append(f"wd={wd:.1f}°, ws={ws:.2f} m/s, TI={ti:.3f}")
-        if parts:
-            ax.set_title(" | ".join(parts))
-
+    if title_from_meta:
+        ax.set_title(" | ".join(f"{k}={v}" for k, v in data.meta.items()))
     return fig, ax
 
 

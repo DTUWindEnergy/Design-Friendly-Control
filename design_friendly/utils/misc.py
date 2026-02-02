@@ -6,6 +6,7 @@ import functools
 import logging
 import sys
 import time as tt
+
 import numpy as np
 
 logging.basicConfig(
@@ -88,7 +89,7 @@ def log_execution_time(
             if every > 1 and (call_count % every) != 0:
                 return
             total = tt.perf_counter() - t_first
-            msg = f"{name} | n={call_count} | {dt:.3f} s | total={total:.0f} s"
+            msg = f"{name} // n={call_count} // {dt:.3f} s // total={total:.0f} s"
             try:
                 if in_nb:
                     if reset_on_new_cell:
@@ -180,14 +181,6 @@ def compare_preds(*preds, ref=0):
         )
         out[i] = r
         print(
-            f"ref{ref} vs pred{i} | n {r['n']} | mean {r['mean']:.3e} | mae {r['mae']:.3e} | rmse {r['rmse']:.3e} | max {r['max_abs']:.3e}"
+            f"ref{ref} vs pred{i} // n {r['n']} // mean {r['mean']:.3e} // mae {r['mae']:.3e} // rmse {r['rmse']:.3e} // max {r['max_abs']:.3e}"
         )
     return out
-
-
-def main():
-    pass
-
-
-if __name__ == "__main__":
-    main()

@@ -37,12 +37,12 @@ def get_flowmodel(wt=None, site=None):
 
     turbulence_model = CrespoHernandez(
         ct2a=ct2a_mom1d,
-        c=[0.73, 0.83, 0.03, -0.32],  # 10.1016/j.jweia.2023.105504
+        c=[0.73, 0.83, 0.03, -0.32],  # 10.1016/j.jweia.2023.105504  # -0.03 is misprint
         addedTurbulenceSuperpositionModel=SqrMaxSum(),
         # rotorAvgModel=CGIRotorAvg(21),
     )
 
-    # Defaults from py_wake.literature except deflection model
+    # Default values from py_wake.literature except deflection model
     # https://gitlab.windenergy.dtu.dk/TOPFARM/PyWake/-/blob/master/py_wake/literature/gaussian_models.py?ref_type=heads
     wf_model = PropagateDownwind(
         site=site,
@@ -53,30 +53,3 @@ def get_flowmodel(wt=None, site=None):
         turbulenceModel=turbulence_model,
     )
     return wf_model
-
-
-if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
-    wf_model = get_flowmodel()
-    D = 284
-    x = np.arange(0, 5 * 11, 5)
-    x = x * D
-
-    y = np.zeros_like(x)
-    sim_res = wf_model(x, y, wd=270.5, ws=7, TI=0.06, yaw=0, tilt=0)
-    print(sim_res)
-    sim_res.flow_map().plot_wake_map()  # this will take a long time
-    plt.show()
-    plt.plot(
-        sim_res["x"].values.squeeze() / D,
-        sim_res["WS_eff"].values.squeeze(),
-        marker="x",
-        linestyle="--",
-        color="gray",
-    )
-    plt.xlabel("Distance [D]")
-    plt.ylabel("WS_eff [m/s]")
-    plt.legend()
-    plt.tight_layout()
-    plt.show()

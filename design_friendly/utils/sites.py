@@ -35,10 +35,8 @@ def scale_by_D(D_origin, x_origin, y_origin, D_new):
         raise ValueError("x_origin and y_origin must have the same shape.")
 
     s = float(D_new) / float(D_origin)
-
     # Scale about the per-axis median
     cx, cy = geometric_median(x_arr, y_arr)
-
     x_scaled = (x_arr - cx) * s + cx
     y_scaled = (y_arr - cy) * s + cy
     return x_scaled, y_scaled
@@ -46,7 +44,7 @@ def scale_by_D(D_origin, x_origin, y_origin, D_new):
 
 def geometric_median(x, y):
     """
-    Compute the medoid (discrete geometric median) of 2D points.
+    Compute the medoid (discrete geometric median) of 2D points. (O(n^2))
 
     Parameters
     ----------
@@ -57,89 +55,12 @@ def geometric_median(x, y):
     -------
     center : ndarray, shape (2,)
         Coordinates of the central point (argmin distance to all points).
-
-    Notes
-    -----
-    O(n^2)
     """
     P = np.column_stack([x, y])  # (n, 2)
     D = np.linalg.norm(P[:, None, :] - P[None, :, :], axis=-1)  # (n, n)
     idx = np.argmin(D.sum(axis=1))  # index of central turbine
     center = P[idx]
     return center
-
-
-def hkn(scale_D=None, subset=True):  # wip
-    raise NotImplementedError("HKN site is work in progress.")
-    from py_wake.site import UniformSite
-    from py_wake.examples.data.dtu10mw import DTU10MW
-    from py_wake.site import UniformWeibullSite
-
-    # originally 11MW SG turbines
-    wt = DTU10MW()
-
-    def hkn_frequencies():
-        """
-        return array: a_weib,
-                array: k_weib,
-                array: sector_probabilities,
-
-        """
-        import os
-
-        hkn_freq_path = os.path.join(DATA_PATH_HKN, "HKNB_frequencies.csv")
-        freqs = np.loadtxt(
-            hkn_freq_path, delimiter=",", skiprows=1, usecols=(1, 2, 3, 4)
-        )
-        centered_wd_bin = freqs[:, 0]
-        a_weib = freqs[:, 1]
-        k_weib = freqs[:, 2]
-        n_samples = freqs[:, 3]
-        total_samples = n_samples.sum()  # 2012 has 366 days!
-        sector_probs = n_samples / total_samples
-
-        return a_weib, k_weib, sector_probs, centered_wd_bin
-
-    def hkn_site(n_sectors=360, ti=0.08, seed=99, options_str=""):
-        """
-        hkn site object compatible with price rose
-        ti: sector-wise ti
-        """
-        a_weib, k_weib, sector_probs, centered_wd_bin = hkn_frequencies()
-        if len(sector_probs) != n_sectors:
-            grid = np.linspace(0, 360, n_sectors, endpoint=True)
-            a_weib = np.interp(grid, centered_wd_bin, a_weib, period=360)
-            k_weib = np.interp(grid, centered_wd_bin, k_weib, period=360)
-            sector_probs = np.interp(grid, centered_wd_bin, sector_probs, period=360)
-            sector_probs = sector_probs / sector_probs.sum()
-            # interpolate values of sector_probs
-        site = UniformWeibullSite(p_wd=sector_probs, a=a_weib, k=k_weib, ti=ti)
-        site.interp_method = "linear"
-        site.name = "grid_site"
-
-        # extend sector_frequencies (wd) to (wd, ws)
-        def weibull_pdf(ws, A, k):
-            return (k / A) * (ws / A) ** (k - 1) * np.exp(-((ws / A) ** k))
-
-        A = site.ds["Weibull_A"]
-        k = site.ds["Weibull_k"]
-        ws_broadcasted = site.ds["ws"].values
-        probs = np.empty((len(site.ds["wd"]), len(site.ds["ws"])))
-        for i, (a, k_val, freq) in enumerate(
-            zip(A.values, k.values, site.ds["Sector_frequency"].values)
-        ):
-            pdf = weibull_pdf(ws_broadcasted, a, k_val)
-            probs[i, :] = pdf * freq
-        site.ds["probs"] = (("wd", "ws"), probs)
-
-        return site
-
-    if scale_D:
-        D_origin = wt.diameter()
-        wt_x, wt_y = scale_by_D(D_origin, layout[0], layout[1], scale_D)
-        layout_scaled = wt_x, wt_y
-        return layout_scaled, site
-    return layout, site, wt
 
 
 def Hornsrev1Site(scale_D=None, move_mediod=True):
