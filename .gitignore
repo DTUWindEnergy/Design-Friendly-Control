@@ -29,3 +29,7 @@ docs/_tags/*
 /design_friendly/predict_ts.ipynb
 /design_friendly/load_draft.ipynb
 /design_friendly/utils/anim_utils.py
+*.png
+*.mp4
+/fi
+design_friendly/Figures_draft

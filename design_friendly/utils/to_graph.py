@@ -21,6 +21,8 @@ from torch_geometric.utils import dense_to_sparse
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # DEBUG
 
+# based on https://github.com/gduthe/windfarm-gnn
+
 
 def geometric_median(x, y):
     """
@@ -111,6 +113,7 @@ def gen_graph_edges(
 ):
     """
     Build a PyG graph edges from turbine coordinates.
+    # based on https://github.com/gduthe/windfarm-gnn
 
     Parameters
     ----------
@@ -264,7 +267,6 @@ def process_one_layout(
             bad_keys = [k for k, v in target_dict.items() if np.isnan(v).any()]
             if bad_keys:
                 raise ValueError(f"NaNs found in target_dict for keys: {bad_keys}")
-
             warnings.warn("nan in target_dict. Filling all targets nan for prediction")
             target_dict = {k: np.repeat(np.nan, n_wt) for k, v in target_dict.items()}
     else:
@@ -278,7 +280,7 @@ def process_one_layout(
     )
 
     if per_turbine_dict is True:
-        warnings.warn("Not tested. Very slow but might help with load predictions.")
+        warnings.warn("Not tested. slow but might help with load predictions.")
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s
 
@@ -364,6 +366,7 @@ def generate_graphs(
 ):
     """
     Convert layout/inflow pairs into a GraphFarmsDataset.
+    # based on https://github.com/gduthe/windfarm-gnn
 
     Parameters
     ----------
@@ -788,23 +791,23 @@ def seq_graph_inputs(ds, _slice):
     convert ~PyWake xarray ds to graph structure
     """
     ds_sel = ds.sel(case=_slice)
-    # edge inputs (per turbine; shape: (n_case, n_wt_max))
+    # edge inputs (n_case, n_wt_max)
     xs = ds_sel.rob_x.values
     ys = ds_sel.rob_y.values
     # misc
     nwts = ds_sel.n_wt.values.astype(int)  # (n_case,)
-    # globals (per case; shape: (n_case,))
+    # globals (n_case,)
     wds = ds_sel.rob_WD.values
     wss = ds_sel.rob_WS.values
     TIs = ds_sel.rob_TI.values
-    # targets (per turbine; shape: (n_case, n_wt_max))
+    # targets (per turbine; (n_case, n_wt_max))
     WS_effs = ds_sel.rob_WS_eff.values
     TI_effs = ds_sel.rob_TI_eff.values
     yaws = np.round(ds_sel.rob_yaw.values, 4)
-    # broadcast globals to per-turbine (shape: (n_case, 1))
+    # broadcast globals to per-turbine (n_case, 1)
     wss_b = wss[:, None]
     TIs_b = TIs[:, None]
-    # deficit targets (shape: (n_case, n_wt_max))
+    # deficit targets (n_case, n_wt_max)
     WS_def = wss_b - WS_effs
     TI_def = TIs_b - TI_effs
     # framework format (variable-length per case)

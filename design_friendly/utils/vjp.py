@@ -8,8 +8,9 @@ default_ts_path = models_filepath + "best.ptnox.torchscript.pt"
 WEST_WD = 270.0
 
 
+# TODO: highlight/refactor var names for rotated coordinates
 @log_execution_time
-def make_dP_dz_inflowgrid(wf_model):  # PyWake partials
+def make_dP_dz_inflowgrid(wf_model, time=False):  # PyWake partials
     """
     Return a packed gradient function dP/dz for total power over an (I,L,K) inflow grid
     (memory intensive).
@@ -17,8 +18,9 @@ def make_dP_dz_inflowgrid(wf_model):  # PyWake partials
     z packs three (I,L,K) fields: yaw, X, Y into one vector:
       n = I*L*K
       yaw = z[0:n].reshape(I,L,K)
-      X   = z[n:2*n].reshape(I,L,K)
-      Y   = z[2*n:3*n].reshape(I,L,K)
+      Xrot_ilk = z[n:2*n].reshape(I,L,K) (_ik for time=True)
+      Yrot_ilk = z[2*n:3*n].reshape(I,L,K) (_ik for time=True)
+      Coordinates are rotated per-wd to align western inflow and stacked (memory-intensive)
 
     Returns
     -------
@@ -33,7 +35,7 @@ def make_dP_dz_inflowgrid(wf_model):  # PyWake partials
         Parameters
         ----------
         z : (3*I*L*K,)  !wrt argument.
-            Packed [yaw, X, Y] as described in make_dP_dz_inflowgrid.
+            Packed [yaw, Xrot, Yrot] as described in make_dP_dz_inflowgrid.
         wds : (L,)
         wss : (K,)
         TI_lk : (L,K)
@@ -50,13 +52,40 @@ def make_dP_dz_inflowgrid(wf_model):  # PyWake partials
         n = I * L * K
         assert z.shape[0] == 3 * n
         yaw = z[0:n].reshape(I, L, K)  # (I,L,K)
-        X = z[n : 2 * n].reshape(I, L, K)
-        Y = z[2 * n : 3 * n].reshape(I, L, K)
+        Xrot_ilk = z[n : 2 * n].reshape(I, L, K)
+        Yrot_ilk = z[2 * n : 3 * n].reshape(I, L, K)
+        # Sequence mode: the only supported time=True encoding here is L==1, K==T
+        if L == 1 and K > 1:
+            assert time is True
+            yaw_it = yaw[:, 0, :]  # (I,K)
+            X_it = Xrot_ilk[:, 0, :]  # (I,K)
+            Y_it = Yrot_ilk[:, 0, :]  # (I,K)
+
+            wd_t = np.full((K,), WEST_WD, dtype=np.float32)  # (K,)
+            ws_t = wss  # (K,)
+            TI_t = TI_lk[0, :]  # (K,)
+            _, _, power_ik, _, _, _ = wf_model(
+                x=X_it,
+                y=Y_it,
+                wd=wd_t,
+                ws=ws_t,
+                TI=TI_t,  # tood: if this causes issues, use TI=float(TI_t[0])
+                yaw=yaw_it,
+                tilt=0,
+                return_simulationResult=False,
+                n_cpu=1,
+                time=True,
+            )
+            return power_ik.sum()
+
+        assert time is False
         _, _, power_ilk, _, _, _ = wf_model(
-            x=X,
-            y=Y,
+            # coordinates are rotated per-wd to align western inflow and stacked (X_ilk)
+            x=Xrot_ilk,
+            y=Yrot_ilk,
             # wd=wds,
             # west-aligned coords for rotated layout
+            # ASSUMES ROTATED COORDINATES! Since this is called vjp
             wd=np.full((L,), WEST_WD, dtype=np.float32),
             ws=wss,
             TI=TI_lk,
@@ -64,169 +93,13 @@ def make_dP_dz_inflowgrid(wf_model):  # PyWake partials
             tilt=0,
             return_simulationResult=False,
             n_cpu=1,
+            time=False,
         )
         return power_ilk.sum()
 
     return autograd(
         power_inflowgrid, argnum=0, vector_interdependence=True
     )  # argnum=0 (z) includes yaw, X, Y
-
-
-# def prepare_inflowgrid_from_graphs(graphfarms, batch_size=2048, edge_uv_cols=(0, 1)):
-#     """Initial graph structure (from training) is a bottleneck right now and should be refactored."""
-#     """
-#     Prepare batched mega-graphs + inflow-grid bridge for fast VJP eval.
-
-#     Assumes each batch forms a full (wd,ws) grid for a single layout size I:
-#     - mega-graph tensors for TorchScript (one forward/backward per batch)
-#     - prefilled z_buf X/Y blocks and (wd,ws)->base_lk mapping (one dP_dz per batch)
-#     """
-#     dev = torch.device("cpu")
-#     col_u, col_v = int(edge_uv_cols[0]), int(edge_uv_cols[1])
-
-#     cached = []
-#     for g in graphfarms:
-#         ei = torch.as_tensor(g.edge_index, dtype=torch.int64, device=dev)
-#         ea = torch.as_tensor(g.edge_attr, dtype=torch.float32, device=dev)
-#         gl = torch.as_tensor(g.globals, dtype=torch.float32, device=dev)
-#         if gl.dim() == 1:
-#             gl = gl[None, :]
-
-#         if getattr(g, "num_nodes", None) is not None:
-#             N = int(g.num_nodes)
-#         elif getattr(g, "y", None) is not None:
-#             N = int(torch.as_tensor(g.y).shape[0])
-#         else:
-#             N = int(ei.max().item()) + 1
-
-#         wd = float(g["meta"]["wd_deg"])
-#         ws = float(g["meta"]["ws"])
-#         ti = float(g["meta"]["ti"])
-#         pos = np.asarray(g["pos"], dtype=np.float32)  # (N,2)
-
-#         theta = float(np.deg2rad(270.0 - wd))
-#         cached.append(
-#             dict(
-#                 edge_index=ei,
-#                 edge_attr0=ea,
-#                 globals=gl,
-#                 N=N,
-#                 wd=wd,
-#                 ws=ws,
-#                 ti=ti,
-#                 pos=pos,
-#                 c=float(np.cos(theta)),
-#                 s=float(np.sin(theta)),
-#             )
-#         )
-
-#     prepared = []
-#     for i0 in range(0, len(cached), batch_size):
-#         chunk = cached[i0 : i0 + batch_size]
-#         M = len(chunk)
-#         if M == 0:
-#             continue
-
-#         I = int(chunk[0]["N"])  # noqa: E741
-#         for c in chunk:
-#             if int(c["N"]) != I:
-#                 raise ValueError("Batch must have constant turbine count I")
-
-#         # grid axes
-#         wds = np.asarray(sorted({c["wd"] for c in chunk}), dtype=np.float32)  # (L,)
-#         wss = np.asarray(sorted({c["ws"] for c in chunk}), dtype=np.float32)  # (K,)
-#         L, K = int(wds.size), int(wss.size)
-#         if M != L * K:
-#             raise ValueError("Batch must be a full (wd,ws) grid: M == L*K")
-
-#         wd_to_l = {float(wd): i for i, wd in enumerate(wds)}
-#         ws_to_k = {float(ws): j for j, ws in enumerate(wss)}
-#         LK = L * K
-#         n = I * LK
-
-#         # mega-graph build
-#         ei_list, ea_list, src_list, dst_list, batch_list, gl_list = (
-#             [],
-#             [],
-#             [],
-#             [],
-#             [],
-#             [],
-#         )
-#         filled = np.zeros((L, K), dtype=bool)
-#         base_lk = np.empty((M,), dtype=np.int64)  # (M,) base index l*K+k per graph
-#         c_arr = np.empty((M,), dtype=np.float32)  # (M,)
-#         s_arr = np.empty((M,), dtype=np.float32)  # (M,)
-
-#         # packed z buffer: (3*n,) with X/Y filled here, yaw filled at runtime
-#         z_buf = np.empty((3 * n,), dtype=np.float32)
-#         X_flat = z_buf[n : 2 * n]
-#         Y_flat = z_buf[2 * n : 3 * n]
-#         TI_lk = np.empty((L, K), dtype=np.float32)  # (L,K)
-
-#         for m, c in enumerate(chunk):
-#             off = m * I
-
-#             ei = c["edge_index"]
-#             if ei.numel() == 0:
-#                 raise ValueError("Empty edge_index in batch")
-#             ei_off = ei + off
-#             ei_list.append(ei_off)
-#             src_list.append(ei_off[0])
-#             dst_list.append(ei_off[1])
-#             ea_list.append(c["edge_attr0"])
-#             batch_list.append(torch.full((I,), m, dtype=torch.int64, device=dev))
-#             gl_list.append(c["globals"])
-
-#             l = wd_to_l[float(c["wd"])]  # noqa: E741
-#             k = ws_to_k[float(c["ws"])]
-#             if filled[l, k]:
-#                 raise ValueError("Duplicate (wd,ws) in batch")
-#             filled[l, k] = True
-
-#             base = int(l * K + k)
-#             base_lk[m] = base
-#             c_arr[m] = np.float32(c["c"])
-#             s_arr[m] = np.float32(c["s"])
-
-#             pos = c["pos"]  # (I,2) expected
-#             X_flat[base::LK] = pos[:, 0]
-#             Y_flat[base::LK] = pos[:, 1]
-#             TI_lk[l, k] = np.float32(c["ti"])
-
-#         edge_index = torch.cat(ei_list, dim=1)
-#         edge_attr0 = torch.cat(ea_list, dim=0)
-#         src = torch.cat(src_list, dim=0)
-#         dst = torch.cat(dst_list, dim=0)
-#         batch = torch.cat(batch_list, dim=0)
-#         globals_ = torch.cat(gl_list, dim=0)
-
-#         prepared.append(
-#             dict(
-#                 edge_index=edge_index,
-#                 edge_attr0=edge_attr0,
-#                 globals=globals_,
-#                 batch=batch,
-#                 src=src,
-#                 dst=dst,
-#                 col_u=col_u,
-#                 col_v=col_v,
-#                 edge_attr_buf=torch.empty_like(edge_attr0),
-#                 grad_uv_buf=torch.empty((M * I, 2), dtype=torch.float32, device=dev),
-#                 I=I,
-#                 c=c_arr,
-#                 s=s_arr,
-#                 base_lk=base_lk,
-#                 wds=wds,
-#                 wss=wss,
-#                 TI_lk=TI_lk,
-#                 z_buf=z_buf,
-#                 v_flat=np.empty((M * I,), dtype=np.float32),
-#                 direct_flat=np.empty((M * I, 2), dtype=np.float32),
-#             )
-#         )
-
-#     return prepared
 
 
 def gradP_vjp_xy_inflowgrid_prepared(
@@ -326,8 +199,6 @@ def gradP_vjp_xy_inflowgrid_prepared(
         g_scaled = g_duv / uv_scale
         grad_uv_buf.index_add_(0, dst, g_scaled)
         grad_uv_buf.index_add_(0, src, -g_scaled)
-        # this one is torch_script convention !!!
-
         c_arr = b["c"]
         s_arr = b["s"]
         for m in range(M):
@@ -337,9 +208,6 @@ def gradP_vjp_xy_inflowgrid_prepared(
 
             grad_uv = grad_uv_buf[off : off + I]  # (I,2)
             grad_xy = torch.empty_like(grad_uv)
-            # grad_xy[:, 0] = grad_uv[:, 0] * cth - grad_uv[:, 1] * sth
-            # grad_xy[:, 1] = grad_uv[:, 0] * sth + grad_uv[:, 1] * cth
-            # grad_uv: (I,2)  ->  grad_xy = R^T grad_uv
             grad_xy[:, 0] = grad_uv[:, 0] * cth + grad_uv[:, 1] * sth
             grad_xy[:, 1] = -grad_uv[:, 0] * sth + grad_uv[:, 1] * cth
 
@@ -353,9 +221,6 @@ def gradP_vjp_xy_inflowgrid_prepared(
             dP_dxy_list.append(out)
 
     return (dP_dxy_list, gamma_list) if return_gamma else dP_dxy_list
-
-
-# mega-graph without to_graph calls
 
 
 def _medoid_center(points_xy):
@@ -423,8 +288,8 @@ def _edge_index_from_rotpos(
         'wake_aware', 'fully_connected', or 'delaunay'
     rotor_diameter : float
     k_wake : float
-    conn_distxmaxD : float | None
-    conn_topk : int | None
+    conn_distxmaxD : float or None
+    conn_topk : int or None
 
     Returns
     -------
@@ -497,14 +362,9 @@ def prepare_inflowgrid_from_layout(
 ):
     """
     Build 'prepared' batches directly from a single layout and an (wd,ws) inflow grid.
-
-    Produces the same structure consumed by 'gradP_vjp_xy_inflowgrid_prepared'
-    without instantiating per-case PyG Data objects.
-
-    Notes
-    -----
     Coordinates are rotated per wd so inflow is always west-aligned; therefore 'wds' stored
     for PyWake partials is a length-L vector of 270 deg (one per wd-index).
+    Produces the sae structure consumed by 'gradP_vjp_xy_inflowgrid_prepared'.
     """
     dev = torch.device("cpu")
     col_u, col_v = int(edge_uv_cols[0]), int(edge_uv_cols[1])
@@ -634,6 +494,216 @@ def prepare_inflowgrid_from_layout(
     return prepared
 
 
+def prepare_inflowseq_from_layout(
+    x,
+    y,
+    wd_t,
+    ws_t,
+    TI,
+    batch_size=None,
+    connectivity="wake_aware",
+    edge_uv_cols=(0, 1),
+    rotor_diameter=284.0,
+    k_wake=0.40,
+    conn_distxmaxD=None,
+    conn_topk=None,
+):
+    """
+    Build 'prepared' batches directly from a single layout and a paired inflow time series.
+      - L = 1 (west-aligned wd axis)
+      - K = T (ws axis indexes time steps)
+      - LK = L*K = T
+      - base_lk = [0, 1, ..., T-1] (one grid index per case)
+    The changing wind direction is represented by rotating the layout per wd_t[t]
+    while keeping inflow for PyWake partials west-aligned (wd = WEST_WD).
+
+    Parameters
+    ----------
+    x, y : array_like
+        Turbine coordinates.
+        x: (I,)
+        y: (I,)
+    wd_t, ws_t : array_like
+        Paired time series inflow.
+        wd_t: (T,)
+        ws_t: (T,)
+    TI : float or array_like
+        TI scalar or TI_t with shape (T,). Stored into TI_lk with shape (1,K).
+    batch_size : int, optional
+        If None, one batch for all T. If set, splits into multiple batches; each batch
+        remains internally consistent with L=1 and K=batch_T.
+    connectivity, edge_uv_cols, rotor_diameter, k_wake, conn_distxmaxD, conn_topk
+        Same as prepare_inflowgrid_from_layout.
+
+    Returns
+    -------
+    prepared : list[dict]
+        Each dict matches the structure expected by gradP_vjp_xy_inflowgrid_prepared.
+
+        For a batch of M time steps:
+          - I: int
+          - wds: (1,) == WEST_WD
+          - wss: (M,)
+          - TI_lk: (1, M)
+          - base_lk: (M,) == arange(M)
+          - z_buf: (3*I*M,) with X/Y filled using X_flat[m::M]
+          - mega-graph tensors for TorchScript forward/VJP
+    """
+    dev = torch.device("cpu")
+    col_u, col_v = int(edge_uv_cols[0]), int(edge_uv_cols[1])
+
+    pts = np.column_stack(
+        [np.asarray(x, np.float32), np.asarray(y, np.float32)]
+    )  # (I,2)
+    I = int(pts.shape[0])  # noqa: E741
+
+    wd_t = np.asarray(wd_t, dtype=np.float32)  # (T,)
+    ws_t = np.asarray(ws_t, dtype=np.float32)  # (T,)
+    if wd_t.ndim != 1 or ws_t.ndim != 1 or wd_t.size != ws_t.size:
+        raise ValueError("wd_t and ws_t must be 1D arrays with the same length.")
+    T = int(wd_t.size)
+
+    TI_arr = np.asarray(TI, dtype=np.float32)
+    if TI_arr.ndim == 0:
+        TI_t = np.full((T,), float(TI_arr), dtype=np.float32)  # (T,)
+    else:
+        if TI_arr.ndim != 1 or TI_arr.size != T:
+            raise ValueError(
+                "TI must be a scalar or a 1D array with the same length as wd_t."
+            )
+        TI_t = TI_arr.astype(np.float32, copy=False)
+
+    if batch_size is None:
+        batch_size = T
+    batch_size = int(batch_size)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+
+    center = _medoid_center(pts)
+
+    prepared = []
+    for start in range(0, T, batch_size):
+        end = min(T, start + batch_size)
+        wd_b = wd_t[start:end]  # (M,)
+        ws_b = ws_t[start:end]  # (M,)
+        TI_b = TI_t[start:end]  # (M,)
+        M = int(wd_b.size)
+
+        # Degenerate inflow grid for partials
+        wds_west = np.full((1,), WEST_WD, dtype=np.float32)  # (L=1,)
+        wss_in = ws_b.astype(np.float32, copy=False)  # (K=M,)
+        TI_lk = TI_b[None, :].astype(np.float32, copy=False)  # (1,M)
+        base_lk = np.arange(M, dtype=np.int64)  # (M,)
+
+        # Prepack z_buf: yaw or X or Y, each length n = I*L*K = I*M
+        n = I * M
+        z_buf = np.empty((3 * n,), dtype=np.float32)
+        X_flat = z_buf[n : 2 * n]
+        Y_flat = z_buf[2 * n : 3 * n]
+
+        # Per-case rotation parameters for transforming VJP(u,v)->(x,y)
+        c_arr = np.empty((M,), dtype=np.float32)
+        s_arr = np.empty((M,), dtype=np.float32)
+
+        # Build per-batch unique-wd cache (saves work if wd repeats)
+        wdu, inv = np.unique(wd_b, return_inverse=True)
+        pos_u, eidx_u, eattr_u = [], [], []
+        c_u = np.empty((wdu.size,), dtype=np.float32)
+        s_u = np.empty((wdu.size,), dtype=np.float32)
+
+        for i, wd in enumerate(wdu):
+            pr, c, s = _rotate_to_west(pts, float(wd), center)  # pr: (I,2)
+            ei0 = _edge_index_from_rotpos(
+                pr,
+                connectivity=connectivity,
+                rotor_diameter=rotor_diameter,
+                k_wake=k_wake,
+                conn_distxmaxD=conn_distxmaxD,
+                conn_topk=conn_topk,
+            )  # (2,E)
+            src0 = ei0[0].to(torch.int64)
+            dst0 = ei0[1].to(torch.int64)
+            tpos = torch.as_tensor(pr, dtype=torch.float32)
+            ea0 = (tpos[src0] - tpos[dst0]).to(torch.float32)  # (E,2) PyG convention
+
+            pos_u.append(pr.astype(np.float32, copy=False))
+            eidx_u.append(ei0)
+            eattr_u.append(ea0)
+            c_u[i] = np.float32(c)
+            s_u[i] = np.float32(s)
+
+        # M graphs concatenated
+        ei_list, ea_list, src_list, dst_list, batch_list, gl_list = (
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        for m in range(M):
+            iu = int(inv[m])
+            pr = pos_u[iu]  # (I,2)
+            ei0 = eidx_u[iu]  # (2,E)
+            ea0 = eattr_u[iu]  # (E,2)
+
+            off = m * I
+            ei = ei0 + off
+            ei_list.append(ei)
+            src_list.append(ei[0])
+            dst_list.append(ei[1])
+            ea_list.append(ea0)
+
+            batch_list.append(torch.full((I,), m, dtype=torch.int64, device=dev))
+            gl_list.append(
+                torch.tensor(
+                    [[float(wss_in[m]), float(TI_b[m])]],
+                    dtype=torch.float32,
+                    device=dev,
+                )
+            )
+            # Fill X/Y using the same convention as the grid builder:
+            # For fixed m, indices m, m+M, ..., m+(I-1)M store turbine positions
+            X_flat[m::M] = pr[:, 0]
+            Y_flat[m::M] = pr[:, 1]
+            c_arr[m] = c_u[iu]
+            s_arr[m] = s_u[iu]
+
+        edge_index = torch.cat(ei_list, dim=1).to(torch.int64)
+        edge_attr0 = torch.cat(ea_list, dim=0).to(torch.float32)
+        src = torch.cat(src_list, dim=0).to(torch.int64)
+        dst = torch.cat(dst_list, dim=0).to(torch.int64)
+        batch = torch.cat(batch_list, dim=0).to(torch.int64)
+        globals_ = torch.cat(gl_list, dim=0).to(torch.float32)  # (M,2)
+
+        prepared.append(
+            dict(
+                edge_index=edge_index,
+                edge_attr0=edge_attr0,
+                globals=globals_,
+                batch=batch,
+                src=src,
+                dst=dst,
+                col_u=col_u,
+                col_v=col_v,
+                edge_attr_buf=torch.empty_like(edge_attr0),
+                grad_uv_buf=torch.empty((M * I, 2), dtype=torch.float32, device=dev),
+                I=I,
+                c=c_arr,
+                s=s_arr,
+                base_lk=base_lk,  # (M,) with LK == M
+                wds=wds_west,  # (1,)
+                wss=wss_in,  # (M,)
+                TI_lk=TI_lk,  # (1,M)
+                z_buf=z_buf,  # (3*I*M,)
+                v_flat=np.empty((M * I,), dtype=np.float32),
+                direct_flat=np.empty((M * I, 2), dtype=np.float32),
+            )
+        )
+
+    return prepared
+
+
 # optional: full jacobian
 
 
@@ -700,7 +770,7 @@ def jac_gamma(
         s_arr = b["s"]  # (M,)
 
         def _gamma_from_dq(dq):
-            # PyG Cartesian!: duv = pos[src] - pos[dst]  =>  d(duv) = dq[src] - dq[dst]
+            # PyG Cartesian!: duv = pos[src] - pos[dst]  ->  d(duv) = dq[src] - dq[dst]
             dUV = (dq[src] - dq[dst]) / uv_scale  # (E,2)
 
             edge_attr = edge_attr0.clone()

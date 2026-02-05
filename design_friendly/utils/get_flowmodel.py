@@ -9,7 +9,7 @@ from py_wake.turbulence_models import CrespoHernandez
 from py_wake.wind_farm_models import PropagateDownwind
 
 
-def get_flowmodel(wt=None, site=None):
+def get_flowmodel(wt=None, site=None, propagate=PropagateDownwind):
     if site is None:
         site = UniformSite()  # placeholder
     if wt is None:
@@ -44,7 +44,7 @@ def get_flowmodel(wt=None, site=None):
 
     # Default values from py_wake.literature except deflection model
     # https://gitlab.windenergy.dtu.dk/TOPFARM/PyWake/-/blob/master/py_wake/literature/gaussian_models.py?ref_type=heads
-    wf_model = PropagateDownwind(
+    wf_model = propagate(
         site=site,
         windTurbines=wt,
         wake_deficitModel=deficit_model,
