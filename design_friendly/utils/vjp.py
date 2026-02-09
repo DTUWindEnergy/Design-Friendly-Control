@@ -114,8 +114,8 @@ def gradP_vjp_xy_inflowgrid_prepared(
     Evaluate dP/d(x,y) per graph using prepared mega-graph + inflow-grid partials.
 
     Per prepared batch:
-      - 1 TorchScript forward + backward for VJP through uv edge deltas
-      - 1 packed dP_dz call for v=dP/dyaw and direct=[dP/dX,dP/dY]
+      - TorchScript forward + backward for VJP through uv edge deltas
+      - packed dP_dz call for v=dP/dyaw and direct=[dP/dX,dP/dY]
     Returns list of (I,2) arrays in the per-batch graph order.
     """
     dev = torch.device("cpu")
@@ -197,8 +197,8 @@ def gradP_vjp_xy_inflowgrid_prepared(
         grad_uv_buf = b["grad_uv_buf"]
         grad_uv_buf.zero_()
         g_scaled = g_duv / uv_scale
-        grad_uv_buf.index_add_(0, dst, g_scaled)
-        grad_uv_buf.index_add_(0, src, -g_scaled)
+        grad_uv_buf.index_add_(0, src, g_scaled)
+        grad_uv_buf.index_add_(0, dst, -g_scaled)
         c_arr = b["c"]
         s_arr = b["s"]
         for m in range(M):
@@ -208,16 +208,25 @@ def gradP_vjp_xy_inflowgrid_prepared(
 
             grad_uv = grad_uv_buf[off : off + I]  # (I,2)
             grad_xy = torch.empty_like(grad_uv)
-            grad_xy[:, 0] = grad_uv[:, 0] * cth + grad_uv[:, 1] * sth
-            grad_xy[:, 1] = -grad_uv[:, 0] * sth + grad_uv[:, 1] * cth
+            # grad_xy[:, 0] = grad_uv[:, 0] * cth + grad_uv[:, 1] * sth
+            # grad_xy[:, 1] = -grad_uv[:, 0] * sth + grad_uv[:, 1] * cth
+            grad_xy[:, 0] = grad_uv[:, 0] * cth - grad_uv[:, 1] * sth
+            grad_xy[:, 1] = grad_uv[:, 0] * sth + grad_uv[:, 1] * cth
 
-            out = (
-                (direct[off : off + I] + grad_xy)
-                .detach()
-                .cpu()
-                .numpy()
-                .astype(np.float32, copy=False)
-            )
+            grad_uv = grad_uv_buf[off : off + I]  # (I,2) GNN contrib, rotated space
+            d_uv = direct[off : off + I]  # (I,2) direct contrib, rotated space
+            total_uv = d_uv + grad_uv  # sum in rotated space
+            out_xy = torch.empty_like(total_uv)
+            out_xy[:, 0] = total_uv[:, 0] * cth - total_uv[:, 1] * sth  # R^T
+            out_xy[:, 1] = total_uv[:, 0] * sth + total_uv[:, 1] * cth
+            out = out_xy.detach().cpu().numpy().astype(np.float32, copy=False)
+            # out = (
+            #     (direct[off : off + I] + grad_xy)
+            #     .detach()
+            #     .cpu()
+            #     .numpy()
+            #     .astype(np.float32, copy=False)
+            # )
             dP_dxy_list.append(out)
 
     return (dP_dxy_list, gamma_list) if return_gamma else dP_dxy_list
@@ -716,7 +725,7 @@ def jac_gamma(
     vectorize=True,
 ):
     """
-    Compute per-graph Jacobians J = dgamma/d(x,y) using prepared mega-graphs.
+    Compute per-graph full Jacobians J = dgamma/d(x,y) using prepared mega-graphs.
 
     Parameters
     ----------
@@ -736,7 +745,7 @@ def jac_gamma(
     Returns
     -------
     J_list : list[np.ndarray]
-        List of per-graph Jacobians, each shape (I, I, 2), in physical (x,y).
+        List of per-graph full Jacobians, each shape (I, I, 2), in physical (x,y).
         Axis meanings: [out_node, in_node, (dx,dy)].
     gamma_list : list[np.ndarray], optional
         If return_gamma=True: per-graph gamma vectors, each shape (I,).
