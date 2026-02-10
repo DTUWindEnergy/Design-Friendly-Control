@@ -627,7 +627,7 @@ def graph_maker_time(
     GraphSet
         Graphs for the provided WD/WS combinations.
     """
-    if TI_t.size == 1:
+    if np.size(TI_t) == 1:
         TI_t = np.ones_like(wd_t) * TI_t
     assert len(wd_t) == len(ws_t) == len(TI_t)
     n_ts = len(wd_t)
