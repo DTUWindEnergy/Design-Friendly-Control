@@ -1,3 +1,6 @@
+# coordinates extracted from https://geo.rijkswaterstaat.nl/arcgis/rest/services
+# Ministerie van Infrastructuur en Waterstaat in Nederland rest API
+
 import numpy as np
 
 

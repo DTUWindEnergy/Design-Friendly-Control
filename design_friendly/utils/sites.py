@@ -1,7 +1,15 @@
 from py_wake import numpy as np
 
 
-def scale_by_D(D_origin, x_origin, y_origin, D_new):
+def polygon_area(vertices):  # for hydesign area
+    # vertices: (n, 2)
+    x, y = vertices[:, 0], vertices[:, 1]
+    # Shoelace'; A = 0.5 * |sum_i (x_i * y_{i+1} - y_i * x_{i+1})|
+    signed_area = np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))
+    return 0.5 * np.abs(signed_area)
+
+
+def scale_by_D(D_origin, x_origin, y_origin, D_new, center=None):
     """
     Scale wind farm coordinates when changing rotor diameter, using the
     median (per-axis) of the coordinates as the scale center.
@@ -36,7 +44,10 @@ def scale_by_D(D_origin, x_origin, y_origin, D_new):
 
     s = float(D_new) / float(D_origin)
     # Scale about the per-axis median
-    cx, cy = geometric_median(x_arr, y_arr)
+    if center is None:
+        cx, cy = geometric_median(x_arr, y_arr)
+    else:  # center provided as (cx, cy)
+        cx, cy = float(center[0]), float(center[1])
     x_scaled = (x_arr - cx) * s + cx
     y_scaled = (y_arr - cy) * s + cy
     return x_scaled, y_scaled
@@ -70,20 +81,16 @@ def Hornsrev1Site(scale_D=None, move_mediod=True):
 
     wt = V80()
     site = Hornsrev1Site()
-    layout = wt_x, wt_y
     if move_mediod:
         # move center turbine to origin
         cx, cy = geometric_median(wt_x, wt_y)
         wt_x -= cx
         wt_y -= cy
-        layout = wt_x, wt_y
     if scale_D:
         D_origin = wt.diameter()
-        wt_x, wt_y = scale_by_D(D_origin, layout[0], layout[1], scale_D)
-        layout_scaled = wt_x, wt_y
-        return layout_scaled, site
-
-    return layout, site, wt
+        wt_x, wt_y = scale_by_D(D_origin, wt_x, wt_y, scale_D)
+        return wt_x, wt_y, site
+    return wt_x, wt_y, site, wt
 
 
 def iea37(scale_D=None, n_wt=36):
@@ -92,12 +99,11 @@ def iea37(scale_D=None, n_wt=36):
     assert n_wt in [9, 16, 36, 64]
     site = IEA37Site(n_wt)
     wt = IEA37_WindTurbines()
-    layout = site.initial_position.T
+    layout = site.initial_position.T  # (wt_x, wt_y)
     if scale_D:
         D_origin = wt.diameter()
         wt_x, wt_y = scale_by_D(D_origin, layout[0], layout[1], scale_D)
-        layout_scaled = wt_x, wt_y
-        return layout_scaled, site
+        return wt_x, wt_y, site
     return layout, site, wt
 
 
@@ -106,63 +112,78 @@ def lillgrund(scale_D=None, move_mediod=True):
 
     site = LillgrundSite()
     wt = SWT23()
-    layout = wt_x, wt_y
     if move_mediod:
         # move center turbine to origin
         cx, cy = geometric_median(wt_x, wt_y)
         wt_x -= cx
         wt_y -= cy
-        layout = wt_x, wt_y
     if scale_D:
         D_origin = wt.diameter()
-        wt_x, wt_y = scale_by_D(D_origin, layout[0], layout[1], scale_D)
-        layout_scaled = wt_x, wt_y
-        return layout_scaled, site
-    return layout, site, wt
+        wt_x, wt_y = scale_by_D(D_origin, wt_x, wt_y, scale_D)
+        return wt_x, wt_y, site
+    return wt_x, wt_y, site, wt
 
 
-def hkn(scale_D=284.0, move_mediod=True, return_boundary=False):
-    from design_friendly.utils.iea22s import IEA22s
+def hkn(scale_D=284.0, move_mediod=True, return_boundary=False, ti=0.06):
     from design_friendly.utils.sites_data import HKN_x, HKN_y, HKN_wgsx, HKN_wgsy
     from design_friendly.utils.sites_data import HKN_boundaries
-
     from design_friendly.utils.sites import geometric_median
     from py_wake.site.xrsite import GlobalWindAtlasSite, XRSite
 
-    diam_original = 200.0
-    # site = LillgrundSite()
-    wt = IEA22s()
-    layout = HKN_x, HKN_y
     x_wgscenter, y_wgscenter = geometric_median(HKN_wgsx, HKN_wgsy)  # wgs center
     site = GlobalWindAtlasSite(
         lat=float(y_wgscenter),
         long=float(x_wgscenter),
         roughness=0.0002,
         height=184.0,
-        ti=0.06,
+        ti=ti,
         interp_method="linear",
     )
     site = XRSite(
         site.ds.interp(wd=np.arange(0, 361), method="linear"), interp_method="linear"
-    )
-    site.ds
-
+    )  # allow sampling from wind rose at 1 deg resolution (instead of 30 deg default)
+    bound_x, bound_y = HKN_boundaries[:, 0], HKN_boundaries[:, 1]
     if move_mediod:
         # move center turbine to origin
         cx, cy = geometric_median(HKN_x, HKN_y)  # utm center
         wt_x = HKN_x - cx
         wt_y = HKN_y - cy
-        layout = wt_x, wt_y
+        bound_x = bound_x - cx
+        bound_y = bound_y - cy
+    else:
+        wt_x, wt_y = HKN_x, HKN_y
+        cx, cy = 0.0, 0.0
     if scale_D:
-        scale_D = wt.diameter()
-        wt_x, wt_y = scale_by_D(diam_original, layout[0], layout[1], scale_D)
-        layout_scaled = wt_x, wt_y
+        diam_original = 200.0  # SG11MW
+        wt_x, wt_y = scale_by_D(diam_original, wt_x, wt_y, scale_D, center=(cx, cy))
         if return_boundary:
             bound_x, bound_y = scale_by_D(
-                diam_original, HKN_boundaries[:, 0], HKN_boundaries[:, 1], scale_D
+                diam_original, bound_x, bound_y, scale_D, center=(cx, cy)
             )
-            return layout_scaled, site, np.column_stack([bound_x, bound_y])
-        return layout_scaled, site
     if return_boundary:
-        return layout, site, wt, HKN_boundaries
-    return layout, site, wt
+        return wt_x, wt_y, site, np.column_stack([bound_x, bound_y])
+    return wt_x, wt_y, site
+
+
+def plot_site(x, y, bounds=None):
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+    n_wt = len(x)
+    ax.scatter(x, y, zorder=5, marker="2", label=f"Turbines ({n_wt})")
+    for i, n in enumerate(zip(x, y)):
+        ax.text(n[0], n[1], i)
+    if bounds is not None:
+        ax.plot(bounds[:, 0], bounds[:, 1], lw=2, zorder=3, label="Boundary")
+    ax.legend(loc="upper left")
+    ax.set_aspect("equal")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+
+if __name__ == "__main__":
+    x, y, site, b = hkn(return_boundary=True)
+    plot_site(x, y, b)
+    x, y, site, b = hkn(return_boundary=True, scale_D=None)
+    plot_site(x, y, b)
