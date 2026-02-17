@@ -1,9 +1,9 @@
 from design_friendly.models import models_filepath
+from py_wake import numpy as np
 
 from .misc import log_execution_time
 from .pred import predict_torchscript, torchscript_to_lut
 from .to_graph import graph_maker_lut, graph_maker_sequential, graph_maker_time
-
 from .vjp import (
     gradP_vjp_xy_inflowgrid_prepared,
     make_dP_dz_inflowgrid,
@@ -29,7 +29,7 @@ def easy_yaw_gnn(
 ):
     if sequential:
         assert time is False, "sequential only for steady state"
-        assert len(wd) == len(ws) == len(TI)
+        assert np.size(wd) == np.size(ws) == np.size(TI)
         graphs = graph_maker_sequential(
             xs=x,
             ys=y,
@@ -64,7 +64,7 @@ def easy_yaw_gnn(
         results = torchscript_to_lut(results, wd, ws)
         results = results[:, :, :, output_yaw_idx]
     elif time:
-        assert len(wd) == len(ws), "provide time series"
+        assert np.size(wd) == np.size(ws), "provide time series"
         graphs = graph_maker_time(
             x=x,
             y=y,

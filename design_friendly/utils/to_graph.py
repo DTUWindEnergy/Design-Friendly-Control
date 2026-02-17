@@ -17,7 +17,6 @@ from torch_geometric.transforms import (
 )
 from torch_geometric.utils import dense_to_sparse
 
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  # DEBUG
 
@@ -726,7 +725,12 @@ def graph_maker_lut(
     GraphSet
         Graphs across the provided WD/WS combinations.
     """
-    n_cases = len(wds) * len(wss)
+    x = np.atleast_1d(x)
+    y = np.atleast_1d(y)
+    wds = np.atleast_1d(wds)
+    wss = np.atleast_1d(wss)
+    TI = np.atleast_1d(TI)
+    n_cases = np.size(wds) * np.size(wss)
     coords = [np.column_stack((x, y))] * n_cases  # repeat coordinates for gnn input
     layouts = [{"coords": c, "form": "test"} for c in coords]
     # inflows should cover all combinations of wds and wss
@@ -737,7 +741,7 @@ def graph_maker_lut(
     ]
 
     # generate PyWake-vectorized baseline
-    if per_turbines is True:
+    if per_turbines:
         logging.info("Generating baseline with 0-yaw PyWake")
         from design_friendly.utils.get_flowmodel import get_flowmodel
         from design_friendly.utils.iea22s import IEA22s

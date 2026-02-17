@@ -132,7 +132,9 @@ def torchscript_to_lut(y_cases_or_array, wds, wss):
     Assumes case index = l*n_ws + k, i.e.:
       (wd=wds[0], ws=wss[0..]) then (wd=wds[1], ws=wss[0..]) ...
     """
-    n_wd, n_ws = len(wds), len(wss)
+    wds = np.atleast_1d(wds)
+    wss = np.atleast_1d(wss)
+    n_wd, n_ws = np.size(wds), np.size(wss)
     n_cases_expected = n_wd * n_ws
     if isinstance(y_cases_or_array, np.ndarray):
         Y = y_cases_or_array

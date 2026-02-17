@@ -72,6 +72,7 @@ def Hornsrev1Site(scale_D=None, move_mediod=True):
     site = Hornsrev1Site()
     layout = wt_x, wt_y
     if move_mediod:
+        # move center turbine to origin
         cx, cy = geometric_median(wt_x, wt_y)
         wt_x -= cx
         wt_y -= cy
@@ -107,6 +108,7 @@ def lillgrund(scale_D=None, move_mediod=True):
     wt = SWT23()
     layout = wt_x, wt_y
     if move_mediod:
+        # move center turbine to origin
         cx, cy = geometric_median(wt_x, wt_y)
         wt_x -= cx
         wt_y -= cy
@@ -116,4 +118,51 @@ def lillgrund(scale_D=None, move_mediod=True):
         wt_x, wt_y = scale_by_D(D_origin, layout[0], layout[1], scale_D)
         layout_scaled = wt_x, wt_y
         return layout_scaled, site
+    return layout, site, wt
+
+
+def hkn(scale_D=284.0, move_mediod=True, return_boundary=False):
+    from design_friendly.utils.iea22s import IEA22s
+    from design_friendly.utils.sites_data import HKN_x, HKN_y, HKN_wgsx, HKN_wgsy
+    from design_friendly.utils.sites_data import HKN_boundaries
+
+    from design_friendly.utils.sites import geometric_median
+    from py_wake.site.xrsite import GlobalWindAtlasSite, XRSite
+
+    diam_original = 200.0
+    # site = LillgrundSite()
+    wt = IEA22s()
+    layout = HKN_x, HKN_y
+    x_wgscenter, y_wgscenter = geometric_median(HKN_wgsx, HKN_wgsy)  # wgs center
+    site = GlobalWindAtlasSite(
+        lat=float(y_wgscenter),
+        long=float(x_wgscenter),
+        roughness=0.0002,
+        height=184.0,
+        ti=0.06,
+        interp_method="linear",
+    )
+    site = XRSite(
+        site.ds.interp(wd=np.arange(0, 361), method="linear"), interp_method="linear"
+    )
+    site.ds
+
+    if move_mediod:
+        # move center turbine to origin
+        cx, cy = geometric_median(HKN_x, HKN_y)  # utm center
+        wt_x = HKN_x - cx
+        wt_y = HKN_y - cy
+        layout = wt_x, wt_y
+    if scale_D:
+        scale_D = wt.diameter()
+        wt_x, wt_y = scale_by_D(diam_original, layout[0], layout[1], scale_D)
+        layout_scaled = wt_x, wt_y
+        if return_boundary:
+            bound_x, bound_y = scale_by_D(
+                diam_original, HKN_boundaries[:, 0], HKN_boundaries[:, 1], scale_D
+            )
+            return layout_scaled, site, np.column_stack([bound_x, bound_y])
+        return layout_scaled, site
+    if return_boundary:
+        return layout, site, wt, HKN_boundaries
     return layout, site, wt
