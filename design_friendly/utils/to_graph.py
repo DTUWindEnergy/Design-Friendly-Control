@@ -106,7 +106,7 @@ def gen_graph_edges(
     add_edge="cartesian",
     wd=270,
     rotor_diameter=284,
-    k_wake=0.40,
+    k_wake=0.33,  # cover 99th percentile of the TI distribution in the dataset (0.11) with 3 standard deviations (99.7 coverage) of wake expansion of the gaussian shape
     conn_distxmaxD=None,
     conn_topk=None,
 ):

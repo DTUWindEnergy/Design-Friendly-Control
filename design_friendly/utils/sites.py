@@ -165,20 +165,38 @@ def hkn(scale_D=284.0, move_mediod=True, return_boundary=False, ti=0.06):
     return wt_x, wt_y, site
 
 
-def plot_site(x, y, bounds=None):
+def plot_site(x, y, bounds=None, center=True, save_fig=None):
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    if center:
+        cx, cy = geometric_median(x, y)
+    else:
+        cx, cy = 0.0, 0.0
+    x -= cx
+    y -= cy
+    fig, ax = plt.subplots(figsize=(4, 5))
     n_wt = len(x)
-    ax.scatter(x, y, zorder=5, marker="2", label=f"Turbines ({n_wt})")
+    ax.scatter(x, y, zorder=5, marker="2", label=f"Turbines ({n_wt})", s=80)
     for i, n in enumerate(zip(x, y)):
         ax.text(n[0], n[1], i)
     if bounds is not None:
-        ax.plot(bounds[:, 0], bounds[:, 1], lw=2, zorder=3, label="Boundary")
+        bounds[:, 0] -= cx
+        bounds[:, 1] -= cy
+        ax.plot(
+            bounds[:, 0],
+            bounds[:, 1],
+            lw=2,
+            zorder=3,
+            label="Boundary",
+            ls="--",
+            c="gray",
+        )
     ax.legend(loc="upper left")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
+    if save_fig is not None:
+        fig.savefig(f"{save_fig}.pdf")
     plt.show()
 
 

@@ -196,3 +196,30 @@ class GEN22(GenericWindTurbine):
             ct_idle=0,
             constant_ct=iea22.ct(ws=5),
         )
+
+
+if __name__ == "__main__":
+    import matplotlib.pyplot as plt
+
+    wt = IEA22s()
+    fig, ax1 = plt.subplots(figsize=(7, 4))
+    ax2 = ax1.twinx()
+    ws = np.arange(3, 25, 0.5)
+    c_power = "tab:blue"
+    c_ct = "tab:red"
+    ax1.plot(ws, wt.power(ws) / 1e6, color=c_power, lw=1.8)
+    ax2.plot(ws, wt.ct(ws), color=c_ct, lw=1.8)
+    ax1.set_xlabel("Wind speed (m/s)")
+    ax1.set_ylabel("Power (MW)", color=c_power)
+    ax2.set_ylabel(r"$C_T$ ", color=c_ct)
+    ax1.tick_params(axis="y", colors=c_power)
+    ax2.tick_params(axis="y", colors=c_ct)
+    ax1.spines["left"].set_color(c_power)
+    ax2.spines["right"].set_color(c_ct)
+    lines = [
+        plt.Line2D([0], [0], color=c_power, lw=1.8, label="Power"),
+        plt.Line2D([0], [0], color=c_ct, lw=1.8, label=r"$C_T$"),
+    ]
+    ax1.legend(handles=lines, frameon=True, loc="center left")
+    fig.tight_layout()
+    plt.show()
