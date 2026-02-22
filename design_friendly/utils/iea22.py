@@ -1,8 +1,11 @@
+import os
 import numpy as np
 from py_wake.wind_turbines import WindTurbine
 from py_wake.wind_turbines.power_ct_functions import PowerCtTabular
+from design_friendly.models import models_filepath
 
-pwr = np.loadtxt("./hs2_steady_state.pwr")  # @ricriv run
+hsw_path = os.path.join(models_filepath, "hs2_steady_state.pwr")
+pwr = np.loadtxt(hsw_path)  # @ricriv run
 
 # wt = WindTurbine(
 #     name="IEA 22 MW RWT",
