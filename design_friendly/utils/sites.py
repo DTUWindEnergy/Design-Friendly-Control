@@ -124,24 +124,37 @@ def lillgrund(scale_D=None, move_mediod=True):
     return wt_x, wt_y, site, wt
 
 
-def hkn(scale_D=284.0, move_mediod=True, return_boundary=False, ti=0.06):
+def hkn(
+    scale_D=284.0,
+    move_mediod=True,
+    return_boundary=False,
+    ti=0.06,
+    global_wind_atlas=True,
+):
     from design_friendly.utils.sites_data import HKN_x, HKN_y, HKN_wgsx, HKN_wgsy
     from design_friendly.utils.sites_data import HKN_boundaries
     from design_friendly.utils.sites import geometric_median
-    from py_wake.site.xrsite import GlobalWindAtlasSite, XRSite
 
-    x_wgscenter, y_wgscenter = geometric_median(HKN_wgsx, HKN_wgsy)  # wgs center
-    site = GlobalWindAtlasSite(
-        lat=float(y_wgscenter),
-        long=float(x_wgscenter),
-        roughness=0.0002,
-        height=184.0,
-        ti=ti,
-        interp_method="linear",
-    )
-    site = XRSite(
-        site.ds.interp(wd=np.arange(0, 361), method="linear"), interp_method="linear"
-    )  # allow sampling from wind rose at 1 deg resolution (instead of 30 deg default)
+    if global_wind_atlas:
+        from py_wake.site.xrsite import GlobalWindAtlasSite, XRSite
+
+        x_wgscenter, y_wgscenter = geometric_median(HKN_wgsx, HKN_wgsy)  # wgs center
+        site = GlobalWindAtlasSite(
+            lat=float(y_wgscenter),
+            long=float(x_wgscenter),
+            roughness=0.0002,
+            height=184.0,
+            ti=ti,
+            interp_method="linear",
+        )
+        site = XRSite(
+            site.ds.interp(wd=np.arange(0, 361), method="linear"),
+            interp_method="linear",
+        )  # allow sampling from wind rose at 1 deg resolution (instead of 30 deg default)
+    else:
+        from py_wake.site import UniformSite
+
+        site = UniformSite()
     bound_x, bound_y = HKN_boundaries[:, 0], HKN_boundaries[:, 1]
     if move_mediod:
         # move center turbine to origin
