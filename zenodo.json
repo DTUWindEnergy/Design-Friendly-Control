@@ -1,0 +1,18 @@
+{
+    "description": "<p>design-friendly-control, computationally efficient wind farm control surrogate tools and models for wind farm design.</p>",
+    "license": "MIT",
+    "upload_type": "software",
+    "creators": [
+        {
+            "orcid": "0000-0003-2829-3338",
+            "affiliation": "PhD Fellow, DTU Wind and Energy Systems, Technical University of Denmark",
+            "name": "Dirik, Deniz Gokhan"
+        },
+        {
+            "orcid": "0000-0002-6723-6830",
+            "affiliation": "Senior Development Engineer, DTU Wind and Energy Systems, Technical University of Denmark",
+            "name": "Friis-M\u00f8ller, Mikkel"
+        }
+    ],
+    "access_right": "open"
+}

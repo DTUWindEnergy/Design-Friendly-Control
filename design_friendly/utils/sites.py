@@ -178,7 +178,7 @@ def hkn(
     return wt_x, wt_y, site
 
 
-def plot_site(x, y, bounds=None, center=True, save_fig=None):
+def plot_site(x, y, bounds=None, d=None, center=True, save_fig=None, text=False):
     import matplotlib.pyplot as plt
 
     if center:
@@ -189,9 +189,10 @@ def plot_site(x, y, bounds=None, center=True, save_fig=None):
     y -= cy
     fig, ax = plt.subplots(figsize=(4, 5))
     n_wt = len(x)
-    ax.scatter(x, y, zorder=5, marker="2", label=f"Turbines ({n_wt})", s=80)
-    for i, n in enumerate(zip(x, y)):
-        ax.text(n[0], n[1], i)
+    ax.scatter(x, y, zorder=5, marker="2", label=f"Turbines (n={n_wt})", s=80)
+    if text:
+        for i, n in enumerate(zip(x, y)):
+            ax.text(n[0], n[1], i)
     if bounds is not None:
         bounds[:, 0] -= cx
         bounds[:, 1] -= cy
@@ -203,7 +204,20 @@ def plot_site(x, y, bounds=None, center=True, save_fig=None):
             label="Boundary",
             ls="--",
             c="gray",
+            alpha=0.8,
         )
+    if d is not None:
+        d_every = 15
+        for axis, coords in [(ax.xaxis, x), (ax.yaxis, y)]:
+            vmin, vmax = coords.min() / d, coords.max() / d
+            ticks_d = np.arange(
+                np.floor(vmin / d_every) * d_every,
+                np.ceil(vmax / d_every) * d_every + d_every,
+                d_every,
+            )
+            axis.set_ticks(ticks_d * d)
+            axis.set_ticklabels([f"{t:.0f}D" for t in ticks_d])
+
     ax.legend(loc="upper left")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
@@ -215,6 +229,6 @@ def plot_site(x, y, bounds=None, center=True, save_fig=None):
 
 if __name__ == "__main__":
     x, y, site, b = hkn(return_boundary=True)
-    plot_site(x, y, b)
+    plot_site(x, y, b, d=284.0)
     x, y, site, b = hkn(return_boundary=True, scale_D=None)
     plot_site(x, y, b)
