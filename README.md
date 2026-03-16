@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19048466.svg)](https://doi.org/10.5281/zenodo.19048466)
 # Design-Friendly Wind Farm Control
 
 Yaw control setpoint estimation for wind farms using layout-agnostic Graph Neural Networks (GNNs).
