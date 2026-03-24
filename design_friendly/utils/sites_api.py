@@ -157,7 +157,7 @@ def plot_all(results, crs="wgs84", disp_name=True):
     ax.legend(loc="upper left")
     ax.set_xlabel(xname)
     ax.set_ylabel(yname)
-    ax.set_title("Hollandse Kust Noord — all available layers")
+    ax.set_title("Hollandse Kust Noord - all available layers")
     ax.set_aspect("equal")
     ax.grid(True, alpha=0.3)
     plt.tight_layout()

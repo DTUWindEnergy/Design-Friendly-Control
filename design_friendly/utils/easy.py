@@ -3,18 +3,12 @@ from py_wake import numpy as np
 
 from design_friendly.utils.misc import log_execution_time
 from design_friendly.utils.pred import predict_torchscript, torchscript_to_lut
-from design_friendly.utils.to_graph import graph_maker_lut, graph_maker_sequential, graph_maker_time
-from design_friendly.utils.vjp import (
-    gradP_vjp_xy_inflowgrid_prepared,
-    make_dP_dz_inflowgrid,
-    prepare_inflowgrid_from_layout,  # mega-graph
-    prepare_inflowseq_from_layout,  # mega-graph sequence
-)
+from design_friendly.utils.graph import graph_maker
+from design_friendly.utils.vjp import prepare_from_graphs, make_dP_dz_inflowgrid, gradP_vjp_xy_inflowgrid_prepared
 
 
-# TODO: generalize vjp's graph structure to to_graph
 @log_execution_time
-def easy_yaw_gnn(
+def easy(
     x,
     y,
     wd,
@@ -23,68 +17,45 @@ def easy_yaw_gnn(
     model_path=models_filepath + "torchscript26a.pt",
     num_threads=0,
     batch_size=512,
-    time=False,
-    # output_yaw_idx=-1,  # multivariate preds
-    sequential=False,
+    lut=True,
 ):
-    if sequential:
-        assert time is False, "sequential only for steady state"
-        assert np.size(wd) == np.size(ws) == np.size(TI)
-        graphs = graph_maker_sequential(
-            xs=x,
-            ys=y,
-            wds=wd,
-            wss=ws,
-            TIs=TI,
-            connectivity="wake_aware",
-        )
-        results = predict_torchscript(
-            model_path,
-            graphs,
-            batch_size,
-            "array",
-        )  # wt, ts, out
-        # results = results[:, :, output_yaw_idx]  # 
-        results = results.squeeze()
-    elif not time:
-        graphs = graph_maker_lut(
-            x=x,
-            y=y,
-            wds=wd,
-            wss=ws,
-            TI=TI,
-            num_threads=num_threads,
-            connectivity="wake_aware",
-        )
-        results = predict_torchscript(
-            model_path,
-            graphs,
-            batch_size,
-            "array",
-        )  # wt, wd, ws, out
+    """Predict yaw angles using the unified graph_maker().
+
+    Parameters
+    ----------
+    x, y : array-like
+        ''(n_wt,)'' fixed layout, or ''(n_cases, n_wt_max)'' NaN-padded for sequential mode.
+    wd, ws : array-like
+        ''(n_wd,)'' / ''(n_ws,)'' grid axes when ''lut=True''.
+        ''(n_cases,)'' paired values when ''lut=False''.
+    TI : float
+        Turbulence intensity (scalar).
+    lut : bool, default True
+        ''True'' - wdxws cartesian product (LUT).
+        ''False'' - 1:1 pairing; sequential mode auto-detected when x is 2D.
+    """
+    graphs = graph_maker(
+        x=x,
+        y=y,
+        wd=wd,
+        ws=ws,
+        TI=TI,
+        lut=lut,
+        num_threads=num_threads,
+        connectivity="wake_aware",
+    )
+    results = predict_torchscript(model_path, graphs, batch_size, "array")
+
+    if lut:
         results = torchscript_to_lut(results, wd, ws)
-        results = results[:, :, :]
-    elif time:
-        assert np.size(wd) == np.size(ws), "provide time series"
-        graphs = graph_maker_time(
-            x=x,
-            y=y,
-            wd_t=wd,
-            ws_t=ws,
-            TI_t=TI,
-            num_threads=num_threads,
-            connectivity="wake_aware",
-        )
-        results = predict_torchscript(
-            model_path,
-            graphs,
-            batch_size,
-            "array",
-        )  # ts, wt, out
-        # results = results[:, :, output_yaw_idx]  # 
-        results = results.T.squeeze()  # wt, ts
+        # results = results[:, :, :]
+    elif np.asarray(x).ndim == 1:
+        # time-series
+        results = results.T.squeeze()
     else:
-        raise ValueError("invalid combination of time, sequential or lut")
+        # sequential
+        results = results.squeeze()
+
     return results
 
 
@@ -132,22 +103,20 @@ def easy_grad(
 
     Returns
     -------
-    easy : callable
-        easy(wd, ws, TI, return_gamma=False)
+    grad_fn : callable
+        grad_fn(wd, ws, TI, return_gamma=False)
 
         Modes inferred from wd/ws:
           - scalar/scalar -> single case
-          - 1D/1D with same length -> time series (paired)
-          - 1D/1D with different lengths -> LUT grid (cross-product)
+          - 1D/1D same length + time=True -> time series (paired)
+          - 1D/1D -> LUT grid (cross-product)
 
         Outputs:
           - single: dP_dxy (n_wt, 2)
           - time:   dP_dxy (n_wt, T, 2)
           - LUT:    dP_dxy (n_wt, n_wd, n_ws, 2)
-        If return_gamma=True, returns matching gamma arrays without the last dim.
+        If return_gamma=True, also returns gamma with the same shape minus the last axis.
     """
-    from py_wake import numpy as np
-
     if isinstance(coords, tuple) and len(coords) == 2:
         x = np.asarray(coords[0])  # (n_wt,)
         y = np.asarray(coords[1])  # (n_wt,)
@@ -159,7 +128,7 @@ def easy_grad(
     # cache packed PyWake partials for reuse across calls
     dP_dz = make_dP_dz_inflowgrid(wf_model, time=time)
 
-    def easy(wd, ws, TI, *, return_gamma=False, time=time):
+    def grad_fn(wd, ws, TI, *, return_gamma=False, time=time):
         """
         Compute full chain-rule dP/d(x,y) for given inflow.
 
@@ -193,39 +162,44 @@ def easy_grad(
             assert wds.ndim == 1 and wss.ndim == 1
             mode = "time"
 
-        if mode == "lut":
-            # cross-product grid: (n_wd, n_ws)
-            wd_grid, ws_grid = np.meshgrid(wds, wss, indexing="ij")
-            wds_flat = wd_grid.ravel()
-            wss_flat = ws_grid.ravel()
-            n_wd, n_ws = wd_grid.shape
-        else:
-            wds_flat = np.atleast_1d(wds)
-            wss_flat = np.atleast_1d(wss)
+        wds_1d = np.atleast_1d(wds)
+        wss_1d = np.atleast_1d(wss)
 
-        if time:
-            prepared = prepare_inflowseq_from_layout(
-                x=x,
-                y=y,
-                wd_t=wds_flat,
-                ws_t=wss_flat,
+        if mode == "lut":
+            n_wd, n_ws = len(wds_1d), len(wss_1d)
+            graphs = graph_maker(
+                x,
+                y,
+                wd=wds_1d,
+                ws=wss_1d,
                 TI=TI,
+                lut=True,
                 connectivity=connectivity,
-                edge_uv_cols=edge_uv_cols,
                 rotor_diameter=rotor_diameter,
                 k_wake=k_wake,
             )
-        else:
-            prepared = prepare_inflowgrid_from_layout(
-                x=x,
-                y=y,
-                wds=wds_flat,
-                wss=wss_flat,
-                TI=TI,
-                connectivity=connectivity,
+            prepared = prepare_from_graphs(
+                graphs,
+                lut=True,
+                n_wd=n_wd,
                 edge_uv_cols=edge_uv_cols,
+            )
+        else:
+            graphs = graph_maker(
+                x,
+                y,
+                wd=wds_1d,
+                ws=wss_1d,
+                TI=TI,
+                lut=False,
+                connectivity=connectivity,
                 rotor_diameter=rotor_diameter,
                 k_wake=k_wake,
+            )
+            prepared = prepare_from_graphs(
+                graphs,
+                lut=False,
+                edge_uv_cols=edge_uv_cols,
             )
 
         out = gradP_vjp_xy_inflowgrid_prepared(
@@ -269,12 +243,11 @@ def easy_grad(
 
         return dP, g
 
-    return easy
+    return grad_fn
 
 
 if __name__ == "__main__":
     # case
-    import numpy as np
     from design_friendly.utils.iea22s import IEA22s
     from design_friendly.utils.sites import Hornsrev1Site
 
@@ -291,5 +264,5 @@ if __name__ == "__main__":
     # predict LUT
     # from design_friendly.utils.easy import easy_yaw_gnn
 
-    # work with ~PyWake-style inputs
-    yaws = easy_yaw_gnn(x, y, wd=wds, ws=wss, TI=TI, num_threads=n_threads, batch_size=512)
+    # work with PyWake-style inputs
+    yaws = easy(x, y, wd=wds, ws=wss, TI=TI, num_threads=n_threads, batch_size=512)
