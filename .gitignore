@@ -24,6 +24,8 @@ docs/_tags/*
 *_scratch.ipynb
 *_draft.py
 *_draft.ipynb
+*Copy.py
+*Copy.ipynb
 */runs/*
 /design_friendly/models/ifac
 /design_friendly/predict_ts.ipynb

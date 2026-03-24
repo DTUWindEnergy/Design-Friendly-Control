@@ -1,10 +1,10 @@
 from design_friendly.models import models_filepath
 from py_wake import numpy as np
 
-from .misc import log_execution_time
-from .pred import predict_torchscript, torchscript_to_lut
-from .to_graph import graph_maker_lut, graph_maker_sequential, graph_maker_time
-from .vjp import (
+from design_friendly.utils.misc import log_execution_time
+from design_friendly.utils.pred import predict_torchscript, torchscript_to_lut
+from design_friendly.utils.to_graph import graph_maker_lut, graph_maker_sequential, graph_maker_time
+from design_friendly.utils.vjp import (
     gradP_vjp_xy_inflowgrid_prepared,
     make_dP_dz_inflowgrid,
     prepare_inflowgrid_from_layout,  # mega-graph
@@ -24,7 +24,7 @@ def easy_yaw_gnn(
     num_threads=0,
     batch_size=512,
     time=False,
-    output_yaw_idx=-1,  # multivariate preds
+    # output_yaw_idx=-1,  # multivariate preds
     sequential=False,
 ):
     if sequential:
@@ -44,7 +44,8 @@ def easy_yaw_gnn(
             batch_size,
             "array",
         )  # wt, ts, out
-        results = results[:, :, output_yaw_idx]
+        # results = results[:, :, output_yaw_idx]  # 
+        results = results.squeeze()
     elif not time:
         graphs = graph_maker_lut(
             x=x,
@@ -62,7 +63,7 @@ def easy_yaw_gnn(
             "array",
         )  # wt, wd, ws, out
         results = torchscript_to_lut(results, wd, ws)
-        results = results[:, :, :, output_yaw_idx]
+        results = results[:, :, :]
     elif time:
         assert np.size(wd) == np.size(ws), "provide time series"
         graphs = graph_maker_time(
@@ -80,8 +81,8 @@ def easy_yaw_gnn(
             batch_size,
             "array",
         )  # ts, wt, out
-        results = results[:, :, output_yaw_idx]
-        results = results.T  # wt, ts
+        # results = results[:, :, output_yaw_idx]  # 
+        results = results.T.squeeze()  # wt, ts
     else:
         raise ValueError("invalid combination of time, sequential or lut")
     return results
@@ -269,3 +270,26 @@ def easy_grad(
         return dP, g
 
     return easy
+
+
+if __name__ == "__main__":
+    # case
+    import numpy as np
+    from design_friendly.utils.iea22s import IEA22s
+    from design_friendly.utils.sites import Hornsrev1Site
+
+    # this is a smoother version of PyWake IEA22 that works better with wake steering optimization
+    wt = IEA22s()
+    wds = np.arange(0, 360, 4)
+    wss = np.arange(3, 25, 4)
+    x, y, site = Hornsrev1Site(
+        scale_D=wt.diameter()  # scale up the layout based on turbine diameter ratio
+    )
+    TI = 0.04  # site.local_wind().TI_ilk.ravel()s
+    n_threads = 4
+
+    # predict LUT
+    # from design_friendly.utils.easy import easy_yaw_gnn
+
+    # work with ~PyWake-style inputs
+    yaws = easy_yaw_gnn(x, y, wd=wds, ws=wss, TI=TI, num_threads=n_threads, batch_size=512)

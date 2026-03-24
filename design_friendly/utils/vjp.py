@@ -4,7 +4,7 @@ from py_wake import numpy as np
 from py_wake.utils.gradients import autograd
 from design_friendly.models import models_filepath
 
-default_ts_path = models_filepath + "best.ptnox.torchscript.pt"
+default_ts_path = models_filepath + "torchscript26a.pt"
 WEST_WD = 270.0
 
 
